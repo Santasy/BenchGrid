@@ -1,0 +1,2 @@
+disable-search-path-heuristics = true
+search-path = ["."]
