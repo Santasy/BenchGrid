@@ -3,8 +3,9 @@ Shared multiprocess execution engine for BenchGrid.
 
 ``PoolRunner`` is what the unified plan model uses to execute a batch of
 commands built from a grid: it decides how many worker processes to spawn
-(``threads`` or one fewer than the logical CPUs, clamped to the batch size) and
-keeps track of how many commands are running/collected. Completion is surfaced
+(``threads`` or the host CPU budget from :mod:`benchgrid.resources`, clamped to
+the batch size) and keeps track of how many commands are running/collected.
+Completion is surfaced
 as it happens: an optional ``on_complete`` callback receives each result the
 moment its task finishes (in completion order), while ``execute`` still returns
 results in input order. Nothing here knows about building or running
@@ -16,16 +17,15 @@ from threading import Event
 from typing import Generic, TypeVar
 from collections.abc import Callable, Sequence
 
-from psutil import cpu_count
+from .resources import available_cpus
 
 ItemT = TypeVar("ItemT")
 ResultT = TypeVar("ResultT")
 
 
-def default_threads() -> int:
-    """Parallel-worker default: one fewer than the logical CPUs, minimum one."""
-    cpus = cpu_count() or 1
-    return max(1, cpus - 1)
+def default_threads(cpu_reserve: int = 1) -> int:
+    """Parallel-worker default: the host CPU budget, minimum one core."""
+    return available_cpus(cpu_reserve)
 
 
 def mp_context() -> multiprocessing.context.BaseContext:
@@ -59,11 +59,14 @@ class PoolRunner(Generic[ItemT, ResultT]):
         worker: Callable[[ItemT], ResultT],
         *,
         threads: int | None = None,
+        cpu_reserve: int = 1,
         worker_init: Callable[..., object] | None = None,
         worker_init_args: Sequence[object] = (),
     ) -> None:
         self._worker = worker
-        self._requested = default_threads() if threads is None else threads
+        self._requested = (
+            default_threads(cpu_reserve) if threads is None else threads
+        )
         self._worker_init = worker_init
         self._worker_init_args = tuple(worker_init_args)
         self._threads = 0
