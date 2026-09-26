@@ -100,6 +100,9 @@ class WorkPlan:
     args_join: ArgsJoinPolicy
     fixed: Sequence[str] = field(default=(), kw_only=True)
     grid: Grid = field(default=None, kw_only=True)
+    record_tags: Sequence[Mapping[str, str]] | None = field(
+        default=None, kw_only=True
+    )
     parallel: bool = field(default=True, kw_only=True)
     single_core: bool = field(default=True, kw_only=True)
     iteration: IterationPolicy = field(
@@ -135,10 +138,18 @@ class WorkPlan:
 
     def build_commands(self, id_offset: int = 1) -> list[WorkCommand]:
         """Render every grid combination into one WorkCommand."""
-        return [
-            WorkCommand(idx, self.build_command(record), record)
-            for idx, record in enumerate(expand_grid(self.grid), start=id_offset)
-        ]
+        records = expand_grid(self.grid)
+        if self.record_tags is not None and len(self.record_tags) != len(records):
+            raise ValueError("record_tags must have one entry per grid record")
+        commands: list[WorkCommand] = []
+        for offset, record in enumerate(records):
+            tags = dict(record)
+            if self.record_tags is not None:
+                tags.update(self.record_tags[offset])
+            commands.append(
+                WorkCommand(offset + id_offset, self.build_command(record), tags)
+            )
+        return commands
 
     def print_commands(self, prefix: str = "[work]") -> None:
         """Dry-run preview: one line per command, nothing is executed."""
