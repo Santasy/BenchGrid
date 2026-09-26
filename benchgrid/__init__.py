@@ -43,7 +43,7 @@ from .resources import available_cpus, resolve_thread_count
 from .runner import PoolRunner
 from .utils import Grid, WorkRecord, expand_grid, expand_records
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 __all__ = [
     "ArgsJoinPolicy",
