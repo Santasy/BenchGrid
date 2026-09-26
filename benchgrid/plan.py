@@ -35,7 +35,7 @@ from enum import Enum
 from pathlib import Path
 
 from .runner import PoolRunner
-from .utils import Grid, WorkRecord, expand_records
+from .utils import Grid, expand_records
 
 
 class ArgsJoinPolicy(Enum):
