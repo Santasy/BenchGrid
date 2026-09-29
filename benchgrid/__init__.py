@@ -30,6 +30,12 @@ Because plans are plain data they can be inspected, serialised, asserted
 against and merged before a single process is spawned.
 """
 
+__version__ = "0.4.0"
+
+# === Shared engine ===
+from .runner import PoolRunner, default_threads, mp_context
+from .utils import Grid, WorkRecord, expand_grid, expand_records
+
 from .plan import (
     ArgsJoinPolicy,
     IterationPolicy,
@@ -40,10 +46,19 @@ from .plan import (
 )
 from .pool import CommandPool, merge_plans
 from .resources import available_cpus, resolve_thread_count
-from .runner import PoolRunner
-from .utils import Grid, WorkRecord, expand_grid, expand_records
 
-__version__ = "0.3.0"
+# === Data / analysis layer (schema-driven Polars scan + query) ===
+from . import data, scan, schema
+from .data import Dataset, Matrix
+from .scan import scan_csv, scan_csv_lazy, scan_json
+from .schema import (
+    CAST_TYPE_MAP,
+    FilePattern,
+    FolderLevel,
+    LineSchema,
+    ScanSchema,
+    read_schemas,
+)
 
 __all__ = [
     "ArgsJoinPolicy",
@@ -61,4 +76,21 @@ __all__ = [
     "expand_records",
     "merge_plans",
     "resolve_thread_count",
+    "PoolRunner",
+    "default_threads",
+    "mp_context",
+    "schema",
+    "scan",
+    "data",
+    "FolderLevel",
+    "FilePattern",
+    "LineSchema",
+    "ScanSchema",
+    "read_schemas",
+    "CAST_TYPE_MAP",
+    "scan_csv",
+    "scan_csv_lazy",
+    "scan_json",
+    "Dataset",
+    "Matrix",
 ]

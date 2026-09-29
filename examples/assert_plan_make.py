@@ -112,7 +112,9 @@ assert resolve_thread_count(None, cpu_reserve=0) <= available_cpus(0)
 assert resolve_thread_count(None, cpu_reserve=1, command_count=2) == 2
 
 frozen = merge_plans(
-    [seeded], name="frozen", iteration=IterationPolicy.FREEZE_DIMENSION,
+    [seeded],
+    name="frozen",
+    iteration=IterationPolicy.FREEZE_DIMENSION,
     freeze_key="SEED",
 )
 assert frozen.run(dry_run=True) == 0
