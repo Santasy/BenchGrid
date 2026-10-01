@@ -15,6 +15,7 @@ dependencies = [
     "polars",
     "streamlit",
     "altair",
+    "plotly",  # Only used by benchgrid.plots.charts.bars_3d_interactive (lazy import)
 ]
 
 [tool.hatch.version]
