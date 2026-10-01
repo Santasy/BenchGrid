@@ -30,7 +30,7 @@ Because plans are plain data they can be inspected, serialised, asserted
 against and merged before a single process is spawned.
 """
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 # === Shared engine ===
 from .runner import PoolRunner, default_threads, mp_context

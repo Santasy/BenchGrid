@@ -55,7 +55,7 @@ __all__ = [
 ]
 
 #: Chart height (px) of a curve or trade-off tab — more room than a panel.
-CURVE_HEIGHT = 640
+CURVE_HEIGHT = 512
 
 
 def select_step(

@@ -114,11 +114,11 @@ def heatmap(
     ]
     if color_field is not None:
         hexes = sorted({str(r.get(color_field)) for r in records if r.get(color_field)})
-        color = alt.Color(
-            f"{color_field}:N",
-            scale=alt.Scale(domain=hexes, range=hexes) if hexes else None,
-            legend=None,
+        # never pass scale=None: Altair reads it as "no scale" (see _x_axis).
+        color_kw: dict[str, Any] = (
+            {"scale": alt.Scale(domain=hexes, range=hexes)} if hexes else {}
         )
+        color = alt.Color(f"{color_field}:N", legend=None, **color_kw)
     else:
         color = alt.Color(
             f"{metric}:Q",
@@ -405,17 +405,28 @@ def _text_alt(df: pd.DataFrame, key: str):
 
 
 def _x_axis(key: str, log: bool):
-    """Altair quantitative x axis for *key*, optionally log-scaled."""
+    """Altair quantitative x axis for *key*, optionally log-scaled.
+
+    ``scale`` is passed only when log-scaling: Altair reads an explicit
+    ``scale=None`` as *no scale*, which drops the axis and draws the marks in
+    raw data coordinates.
+    """
     import altair as alt  # noqa: PLC0415
 
-    return alt.X(f"{key}:Q", title=key, scale=alt.Scale(type="log") if log else None)
+    kwargs: dict[str, Any] = {"title": key}
+    if log:
+        kwargs["scale"] = alt.Scale(type="log")
+    return alt.X(f"{key}:Q", **kwargs)
 
 
 def _y_axis(key: str, log: bool):
-    """Altair quantitative y axis for *key*, optionally log-scaled."""
+    """Altair quantitative y axis for *key*, optionally log-scaled (see :func:`_x_axis`)."""
     import altair as alt  # noqa: PLC0415
 
-    return alt.Y(f"{key}:Q", title=key, scale=alt.Scale(type="log") if log else None)
+    kwargs: dict[str, Any] = {"title": key}
+    if log:
+        kwargs["scale"] = alt.Scale(type="log")
+    return alt.Y(f"{key}:Q", **kwargs)
 
 
 def lines_chart(
@@ -439,10 +450,22 @@ def lines_chart(
     """
     import altair as alt  # noqa: PLC0415
 
-    assert isinstance(data, pd.DataFrame)
-    df = pd.DataFrame(data)
+    records = _records(data)
+    if not records:
+        return _no_data("heatmap", title or y_key)
+
+    df = pd.DataFrame(records)
     if df.empty:
         return _no_data("heatmap", title or y_key)
+
+    # The encodings below reference columns by name only, and Altair ships the
+    # whole frame, so a wrong key renders a silent blank chart: check them here.
+    missing = [key for key in (x_key, y_key, color_key) if key not in df.columns]
+    if missing:
+        raise KeyError(
+            f"lines_chart: column(s) {missing} not in data; "
+            f"available: {list(df.columns)}"
+        )
 
     x = _x_axis(x_key, log_x)
     y = _y_axis(y_key, log_y)
