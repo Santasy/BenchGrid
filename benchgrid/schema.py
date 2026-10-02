@@ -125,6 +125,7 @@ class LineSchema:
 
     *metrics* maps column index (0-based) → record key name.  *cast* is a JSON
     name (``"int"``/``"float"``/``"str"``) applied to every column value.
+    *ragged* allows rows of different widths in one tree (see below).
     """
 
     key_sep: str | None = ": "  # None → plain value_sep columns
@@ -132,6 +133,11 @@ class LineSchema:
     line_key: str | None = None  # record key for the line prefix (keyed format only)
     metrics: dict[int, str] = field(default_factory=dict)
     cast: str = "int"
+    #: Rows may be shorter than *metrics* (missing trailing columns become
+    #: null) and may carry unknown trailing fields (dropped).  Needed when one
+    #: tree mixes row widths — e.g. several producers appending their own
+    #: optional columns — which a fixed-width CSV read cannot scan at all.
+    ragged: bool = False
 
     def __post_init__(self) -> None:
         if self.key_sep is None and self.line_key is not None:
@@ -148,6 +154,7 @@ class LineSchema:
             # JSON object keys are strings; keep index order (insertion order).
             "metrics": {str(idx): name for idx, name in sorted(self.metrics.items())},
             "cast": self.cast,
+            "ragged": self.ragged,
         }
         if self.line_key is not None:
             out["line_key"] = self.line_key
@@ -161,6 +168,7 @@ class LineSchema:
             line_key=data.get("line_key"),
             metrics={int(idx): name for idx, name in data.get("metrics", {}).items()},
             cast=data.get("cast", "int"),
+            ragged=bool(data.get("ragged", False)),
         )
 
 

@@ -20,8 +20,6 @@ from typing import Any
 
 import polars as pl
 
-__all__ = ["LABEL_KEY", "identity_label", "x_label", "winner_fields", "mm_fields"]
-
 #: Column the curve/pair derives write: the identity keys joined with "·".
 LABEL_KEY = "_label"
 
@@ -128,3 +126,6 @@ def mm_fields(
     return data.with_columns(
         pl.col("_norm").map_elements(_hex, return_dtype=pl.Utf8).alias("_color")
     )
+
+
+__all__ = ["LABEL_KEY", "identity_label", "x_label", "winner_fields", "mm_fields"]

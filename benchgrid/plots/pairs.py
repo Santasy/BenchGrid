@@ -11,6 +11,7 @@ Both axes are reduced independently over the repeated measures (seeds) and then
 inner-joined on the configuration keys: a configuration measured on only one
 side has no pair and is dropped.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -50,7 +51,9 @@ class PairPlotSpec:
     log_y: bool = False
 
 
-def pair_frame(ctx: TabContext, spec: PairPlotSpec, *, agg: str = "mean") -> pl.DataFrame:
+def pair_frame(
+    ctx: TabContext, spec: PairPlotSpec, *, agg: str = "mean"
+) -> pl.DataFrame:
     """
     One row per (*color_keys*, *point_keys*) with both axis metrics.
 
@@ -61,7 +64,9 @@ def pair_frame(ctx: TabContext, spec: PairPlotSpec, *, agg: str = "mean") -> pl.
     """
     adapter = ctx.adapter
     keys = list(dict.fromkeys([*spec.color_keys, *spec.point_keys]))
-    unknown = [m for m in (spec.x_metric, spec.y_metric) if m not in adapter.metric_source]
+    unknown = [
+        m for m in (spec.x_metric, spec.y_metric) if m not in adapter.metric_source
+    ]
     if unknown:
         raise ValueError(
             f"PairPlotSpec metrics not declared in adapter.metric_source: {unknown}"
@@ -78,6 +83,6 @@ def pair_frame(ctx: TabContext, spec: PairPlotSpec, *, agg: str = "mean") -> pl.
         )
 
     pairs = side(spec.x_metric).join(side(spec.y_metric), on=keys, how="inner")
-    return pairs.with_columns(
-        identity_label(spec.color_keys).alias(LABEL_KEY)
-    ).sort(keys)
+    return pairs.with_columns(identity_label(spec.color_keys).alias(LABEL_KEY)).sort(
+        keys
+    )

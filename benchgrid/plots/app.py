@@ -59,16 +59,18 @@ CURVE_HEIGHT = 512
 
 
 def select_step(
-    ctx: TabContext, *, label: str = "Step", key: str = "tab", default: Any = None
+    ctx: TabContext, *, label: str | None = None, key: str = "tab", default: Any = None
 ) -> Any:
     """
     Render the tab body's step selector and set ``ctx.step``.
 
     The selector offers every distinct ``adapter.step_key`` value of the loaded
     data (sorted, no "(all)": a view is always about one concrete step) and
-    defaults to *default* when present, else the lowest value.  Returns the
-    selected step, or ``None`` when the adapter declares no ``step_key`` or the
-    column is empty.  *key* namespaces the widget per tab.
+    defaults to *default* when present, else ``adapter.step_default``, else the
+    lowest value.  Returns the selected step, or ``None`` when the adapter
+    declares no ``step_key`` or the column is empty.  *key* namespaces the
+    widget per tab; *label* defaults to ``adapter.step_label`` so every view of
+    one workload names its step dimension the same way.
     """
     adapter = ctx.adapter
     step_key = adapter.step_key
@@ -80,8 +82,12 @@ def select_step(
     if not values:
         ctx.step = None
         return None
+    if default is None:
+        default = adapter.step_default
     index = values.index(default) if default in values else 0
-    ctx.step = st.selectbox(label, values, index=index, key=f"step_{key}")
+    ctx.step = st.selectbox(
+        label or adapter.step_label, values, index=index, key=f"step_{key}"
+    )
     return ctx.step
 
 

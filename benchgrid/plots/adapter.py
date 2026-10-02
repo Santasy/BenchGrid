@@ -20,9 +20,10 @@ is project knowledge (see :mod:`~benchgrid.plots.context`).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 import polars as pl
 
@@ -102,6 +103,12 @@ class PlotsAdapter:
     run_keys: list[str]
     progress_key: str = "n"
     step_key: str | None = "step"
+    #: Value the step selector starts on (the lowest one otherwise).  Declared
+    #: here so a view whose natural phase is not the lowest keeps a sensible
+    #: default without writing its own selector.
+    step_default: Any = None
+    #: Label of the step selector every view opens with.
+    step_label: str = "Step"
     dims: list[str] = field(default_factory=list)
     x_keys: list[str] = field(default_factory=lambda: ["struct_symbol", "version"])
     y_key: str = "node_bytes"

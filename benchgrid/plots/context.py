@@ -6,6 +6,7 @@ dataset and the current sidebar/tab selection.  Keeping it streamlit-free means
 a headless caller (a CLI, a test) can build one and drive the project tab's
 frame logic without a UI.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

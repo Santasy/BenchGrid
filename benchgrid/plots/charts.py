@@ -525,9 +525,7 @@ def scatter(
         color = alt.Color(f"{color_key}:N", title=color_key)
         points = mark.encode(x=x, y=y, color=color)
         labels = (
-            base.mark_text(dy=-10, fontSize=10).encode(
-                x=x, y=y, text=text, color=color
-            )
+            base.mark_text(dy=-10, fontSize=10).encode(x=x, y=y, text=text, color=color)
             if text is not None
             else None
         )

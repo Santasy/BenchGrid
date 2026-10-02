@@ -60,6 +60,13 @@ def _filter_frame(df: pl.DataFrame, fixed: dict[str, Any]) -> pl.DataFrame:
     return df
 
 
+def _ordered(values: set[Any]) -> list[Any]:
+    """Axis values in matrix order: numerically when all numbers, else by text."""
+    if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in values):
+        return sorted(values)
+    return sorted(values, key=str)
+
+
 def _agg_expr(method: str, metric: str) -> pl.Expr:
     """Polars reduction expression per aggregate method name."""
     expr = {
@@ -242,24 +249,26 @@ class Matrix:
         *,
         title: str = "",
     ) -> "Matrix":
-        """Build a Matrix from an aggregated frame with columns [rows, cols, metric]."""
-        df = df.select([rows, cols, metric]).sort([rows, cols])
+        """
+        Build a Matrix from an aggregated frame with columns [rows, cols, metric].
+
+        Each axis is ordered on its own — numerically when every value is a
+        number, else by text — so a sweep whose rows do not all cover the same
+        configurations (one column per target size, a structure with a single
+        one, …) still reads in sweep order instead of the order the first row
+        happens to list.
+        """
+        df = df.select([rows, cols, metric])
         values = {(r[rows], r[cols]): r[metric] for r in df.to_dicts()}
         return cls(rows=rows, cols=cols, metric=metric, values=values, title=title)
 
     def row_values(self) -> list[Any]:
-        """Row values in matrix order."""
-        seen: dict[Any, None] = {}
-        for r, _ in self.values:
-            seen.setdefault(r, None)
-        return list(seen)
+        """Row values in matrix order (numeric first, then by text)."""
+        return _ordered({row for row, _ in self.values})
 
     def col_values(self) -> list[Any]:
-        """Column values in matrix order."""
-        seen: dict[Any, None] = {}
-        for _, c in self.values:
-            seen.setdefault(c, None)
-        return list(seen)
+        """Column values in matrix order (numeric first, then by text)."""
+        return _ordered({col for _, col in self.values})
 
     def to_dataframe(self):
         """Pivot as a pandas DataFrame (row label = row value, columns = col values)."""

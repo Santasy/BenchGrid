@@ -7,7 +7,9 @@ the scanned path, so there is no per-file Python loop.
 
 - :func:`scan_csv_lazy` — plain-column ``format="lines"`` sources (one glob per
   extension, ``pl.scan_csv``), returns a lazy frame; chain filters/aggregations
-  and ``.collect()`` once.
+  and ``.collect()`` once.  ``LineSchema.ragged`` switches the read to
+  whole-line + positional split, so a tree whose rows have different widths
+  still scans in one pass.
 - :func:`scan_json` — ``format="json"`` object streams (the "bracketless
   array" formulation: objects joined by commas, no ``[...]``), collapsed to
   NDJSON and parsed with a single ``pl.read_ndjson``.  Nested values stay
@@ -26,6 +28,10 @@ import polars as pl
 
 from .schema import CAST_TYPE_MAP, ScanSchema
 
+#: Separator that cannot occur in a data line, so a CSV row is read as one
+#: field and split positionally (the ragged read path).
+_LINE_SENTINEL = "\x00"
+
 
 def scan_csv_lazy(
     root_dirs: list[str],
@@ -41,6 +47,13 @@ def scan_csv_lazy(
     which become the row metadata columns.  Folder/tag regex groups come out
     as strings (matching the legacy ``scan`` semantics); line values are typed
     with ``LineSchema.cast``.
+
+    With ``LineSchema.ragged`` the rows of one tree may have different widths:
+    the tree is read whole-line and split on ``value_sep``, then column *i* is
+    ``null`` where a row is shorter.  Unknown trailing fields are dropped.  A
+    fixed-width ``pl.scan_csv`` cannot read such a tree at all (it infers one
+    width from the first file and fails on the others), so this path reads every
+    file identically instead of branching per file.
     """
     fp = schema.file_pattern
     ls = schema.line_schema
@@ -79,22 +92,19 @@ def scan_csv_lazy(
         for root in root_dirs
         for ext in (fp.extensions or ["txt"])
     ]
-    overrides = {
-        col: dtype
-        for col in metric_cols
-        for dtype in (_cast_dtype(ls.cast),)
-        if dtype is not None
-    }
-
-    lf = pl.scan_csv(
-        globs,
-        has_header=False,
-        new_columns=metric_cols,
-        separator=ls.value_sep or ";",
-        include_file_paths=path_column,
-        schema_overrides=overrides,
-        ignore_errors=True,
-    )
+    if ls.ragged:
+        lf = _scan_ragged(globs, metric_cols, ls, path_column)
+    else:
+        dtype = _cast_dtype(ls.cast)
+        lf = pl.scan_csv(
+            globs,
+            has_header=False,
+            new_columns=metric_cols,
+            separator=ls.value_sep or ";",
+            include_file_paths=path_column,
+            schema_overrides={col: dtype for col in metric_cols} if dtype else None,
+            ignore_errors=True,
+        )
     return (
         lf.with_columns(
             pl.col(path_column)
@@ -104,6 +114,42 @@ def scan_csv_lazy(
         .unnest("__meta__")
         .drop(path_column)
     )
+
+
+def _scan_ragged(
+    globs: list[str],
+    metric_cols: list[str],
+    line_schema: Any,
+    path_column: str,
+) -> Any:
+    """
+    Whole-line read + positional split for a tree of mixed-width rows.
+
+    Each line is read as a single field (a separator that cannot occur in the
+    data), split on ``value_sep`` once, and column *i* is taken positionally
+    with ``null`` when the row is shorter — still one pass, no per-file loop.
+    """
+    lf = pl.scan_csv(
+        globs,
+        has_header=False,
+        new_columns=[_LINE_KEY],
+        separator=_LINE_SENTINEL,
+        include_file_paths=path_column,
+        ignore_errors=True,
+    ).with_columns(
+        pl.col(_LINE_KEY).str.split(line_schema.value_sep or ";").alias(_FIELDS_KEY)
+    )
+    return lf.with_columns(
+        *[
+            pl.col(_FIELDS_KEY).list.get(index, null_on_oob=True).alias(name)
+            for index, name in enumerate(metric_cols)
+        ]
+    ).drop(_FIELDS_KEY, _LINE_KEY)
+
+
+#: Internal column names of the ragged read path.
+_LINE_KEY = "__line__"
+_FIELDS_KEY = "__fields__"
 
 
 def scan_csv(root_dirs: list[str], schema: ScanSchema, **kwargs):
