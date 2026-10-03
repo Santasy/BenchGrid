@@ -229,9 +229,9 @@ def _execute_commands(
         for command in batch:
             print(f"[{command.id:3d}] Running {command.command}", flush=True)
         outcomes.append(
-            PoolRunner(WorkCommand.execute, threads=threads).execute(
-                batch, on_complete=_report_completion
-            )
+            PoolRunner(
+                WorkCommand.execute, threads=threads, name=f"bg:{label}"
+            ).execute(batch, on_complete=_report_completion)
         )
 
     outcomes: list[list[tuple[int, float]]] = []

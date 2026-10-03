@@ -12,10 +12,11 @@ results in input order. Nothing here knows about building or running
 specifically — the worker callable is injected.
 """
 
+import ctypes
 import multiprocessing
+from collections.abc import Callable, Sequence
 from threading import Event
 from typing import Generic, TypeVar
-from collections.abc import Callable, Sequence
 
 from .resources import available_cpus
 
@@ -26,6 +27,42 @@ ResultT = TypeVar("ResultT")
 def default_threads(cpu_reserve: int = 1) -> int:
     """Parallel-worker default: the host CPU budget, minimum one core."""
     return available_cpus(cpu_reserve)
+
+
+#: ``prctl(2)`` request that renames a process (Linux caps the name at 15 chars).
+_PR_SET_NAME = 15
+_NAME_MAX = 15
+
+
+def set_process_title(title: str) -> None:
+    """
+    Name the calling process, so a forked worker is told apart from its parent.
+
+    A forked pool worker keeps its parent's command line, which makes every
+    process in a sweep look identical in ``htop``/``top``/``ps``; the process
+    name (``comm``) is what those tools can show per worker.  Best effort: a
+    platform without ``prctl`` simply keeps the inherited name.
+    """
+    try:
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        libc.prctl(_PR_SET_NAME, title.encode()[:_NAME_MAX], 0, 0, 0)
+    except (OSError, AttributeError):  # pragma: no cover - platform dependent
+        pass
+
+
+def _init_worker(
+    name: str, init: Callable[..., object] | None, args: Sequence[object]
+) -> None:
+    """
+    Pool initializer: name the worker, then run the caller's own initializer.
+
+    The pool's own ``PoolWorker-<n>`` name supplies the index, so the workers of
+    one sweep are told apart from each other and from their parent.
+    """
+    index = multiprocessing.current_process().name.rpartition("-")[2]
+    set_process_title(f"{name}:{index}"[:_NAME_MAX])
+    if init is not None:
+        init(*args)
 
 
 def mp_context() -> multiprocessing.context.BaseContext:
@@ -62,8 +99,10 @@ class PoolRunner(Generic[ItemT, ResultT]):
         cpu_reserve: int = 1,
         worker_init: Callable[..., object] | None = None,
         worker_init_args: Sequence[object] = (),
+        name: str = "benchgrid",
     ) -> None:
         self._worker = worker
+        self._name = name
         self._requested = (
             default_threads(cpu_reserve) if threads is None else threads
         )
@@ -122,8 +161,8 @@ class PoolRunner(Generic[ItemT, ResultT]):
 
         pool = mp_context().Pool(
             processes=self._threads,
-            initializer=self._worker_init,
-            initargs=self._worker_init_args,
+            initializer=_init_worker,
+            initargs=(self._name, self._worker_init, self._worker_init_args),
         )
 
         collected: dict[int, ResultT] = {}
@@ -161,4 +200,4 @@ class PoolRunner(Generic[ItemT, ResultT]):
         return [collected[i] for i in range(n)]
 
 
-__all__ = ["PoolRunner", "default_threads", "mp_context"]
+__all__ = ["PoolRunner", "default_threads", "mp_context", "set_process_title"]
