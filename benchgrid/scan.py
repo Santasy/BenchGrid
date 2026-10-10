@@ -1,9 +1,9 @@
 """
 Polars-native scanning for BenchGrid.
 
-Both fast paths are all-vectorized: the whole tree is read in one call and the
-per-file metadata (folder levels + file-pattern named groups) is extracted from
-the scanned path, so there is no per-file Python loop.
+Two vectorized fast paths read the whole tree in one call and extract the
+per-file metadata (folder levels + file-pattern named groups) from the scanned
+path, so there is no per-file Python loop:
 
 - :func:`scan_csv_lazy` — plain-column ``format="lines"`` sources (one glob per
   extension, ``pl.scan_csv``), returns a lazy frame; chain filters/aggregations
@@ -14,6 +14,14 @@ the scanned path, so there is no per-file Python loop.
   array" formulation: objects joined by commas, no ``[...]``), collapsed to
   NDJSON and parsed with a single ``pl.read_ndjson``.  Nested values stay
   nested (sub-objects become struct columns, arrays become list columns).
+
+A third path, :func:`scan_csv_with_key_separator`, covers key-separated lines
+(``LineSchema.key_sep`` set): each line is ``<key><sep><values...>`` and the
+keyed prefix is not a plain column ``pl.scan_csv`` can read, so this path
+walks the tree in Python — reusing the same folder/file matching as the fast
+paths — parses one line at a time, and assembles the rows into an eager
+``pl.DataFrame``.  It is the only non-vectorized path and the only one that
+returns an eager frame by construction (there is no lazy variant).
 """
 
 from __future__ import annotations
@@ -74,11 +82,13 @@ def scan_csv_lazy(
             f"scan_csv_lazy needs LineSchema.metrics columns, got none: {ls.metrics!r}"
         )
 
-    path_groups = [_strip_anchors(lvl.pattern) for lvl in schema.folder_levels] + [
-        _strip_anchors(fp.pattern)
-    ]
+    path_groups = [
+        _strip_anchors(lvl.pattern) for lvl in schema.folder_levels
+    ] + [_strip_anchors(fp.pattern)]
     path_group_names = {
-        name for group in path_groups for name in re.findall(r"\?P<(\w+)>", group)
+        name
+        for group in path_groups
+        for name in re.findall(r"\?P<(\w+)>", group)
     }
     if path_group_names & set(metric_cols):
         raise ValueError(
@@ -102,7 +112,9 @@ def scan_csv_lazy(
             new_columns=metric_cols,
             separator=ls.value_sep or ";",
             include_file_paths=path_column,
-            schema_overrides={col: dtype for col in metric_cols} if dtype else None,
+            schema_overrides={col: dtype for col in metric_cols}
+            if dtype
+            else None,
             ignore_errors=True,
         )
     return (
@@ -137,7 +149,9 @@ def _scan_ragged(
         include_file_paths=path_column,
         ignore_errors=True,
     ).with_columns(
-        pl.col(_LINE_KEY).str.split(line_schema.value_sep or ";").alias(_FIELDS_KEY)
+        pl.col(_LINE_KEY)
+        .str.split(line_schema.value_sep or ";")
+        .alias(_FIELDS_KEY)
     )
     return lf.with_columns(
         *[
@@ -202,12 +216,136 @@ def scan_json(root_dirs: list[str], schema: ScanSchema) -> pl.DataFrame:
             )
             if keys is None:
                 continue  # does not match the folder/file layout
-            parts.append(_json_stream_to_ndjson(path.read_text(), marker_token, keys))
+            parts.append(
+                _json_stream_to_ndjson(path.read_text(), marker_token, keys)
+            )
 
     buffer = "\n".join(p for p in parts if p)
     if not buffer:
         return pl.DataFrame()
     return pl.read_ndjson(io.StringIO(buffer))
+
+
+def scan_csv_with_key_separator(
+    root_dirs: list[str], schema: ScanSchema
+) -> pl.DataFrame:
+    """
+    Walk each directory in *root_dirs* according to *schema* and return a
+    flat polars DataFrame.  Each row is built by the same per-line reading
+    logic, with columns fully determined by the schema.
+    """
+    fp = schema.file_pattern
+    ls = schema.line_schema
+    if fp.format != "lines":
+        raise ValueError(
+            f"scan_csv_lazy supports format='lines' only (got {fp.format!r}). "
+            "Use scan_json() for JSON object streams."
+        )
+    if ls is None or ls.key_sep is None:
+        raise ValueError(
+            "scan_csv_with_key_separator requires a key-separator"
+            " per line (LineSchema.key_sep). "
+        )
+
+    compiled_folders = [lvl.compile() for lvl in schema.folder_levels]
+    compiled_file = schema.file_pattern.compile()
+
+    records: list[dict] = []
+    for root in root_dirs:
+        root_path = Path(root)
+        if not root_path.is_dir():
+            print(f"[scan] skipping non-existent root: {root}")
+            continue
+        _walk_scan_csv_with_key_separator(
+            root_path, 0, schema, compiled_folders, compiled_file, {}, records
+        )
+
+    return pl.DataFrame(records)
+
+
+def _walk_scan_csv_with_key_separator(
+    current: Path,
+    level: int,
+    schema: ScanSchema,
+    compiled_folders: list[re.Pattern],
+    compiled_file: re.Pattern,
+    inherited: dict[str, Any],
+    records: list[dict],
+) -> None:
+    if level == len(schema.folder_levels):
+        _parse_csv_with_key_separator(
+            current, schema, compiled_file, inherited, records
+        )
+        return
+
+    pattern = compiled_folders[level]
+    folder_level = schema.folder_levels[level]
+
+    for child in sorted(current.iterdir()):
+        if not child.is_dir():
+            continue
+        m = pattern.fullmatch(child.name)
+        if m is None:
+            if folder_level.required:
+                continue
+            # Non-required level: skip unmatched dirs silently
+            continue
+        # groupdict() is {} for pass-through levels (no named groups) — intentional
+        keys = {**inherited, **m.groupdict()}
+        _walk_scan_csv_with_key_separator(
+            child,
+            level + 1,
+            schema,
+            compiled_folders,
+            compiled_file,
+            keys,
+            records,
+        )
+
+
+def _parse_csv_with_key_separator(
+    directory: Path,
+    schema: ScanSchema,
+    compiled_file: re.Pattern,
+    inherited: dict[str, Any],
+    records: list[dict],
+) -> None:
+    ls = schema.line_schema
+    valid_exts = set(schema.file_pattern.extensions)
+    csv_metrics = dict(ls.metrics)
+    csv_metrics.pop(0)  # Pop the line_key at index 0.
+
+    for filepath in sorted(directory.iterdir()):
+        if not filepath.is_file():
+            continue
+        if valid_exts and filepath.suffix.lstrip(".") not in valid_exts:
+            continue
+        m = compiled_file.fullmatch(filepath.name)
+        if m is None:
+            continue
+
+        file_keys = {**inherited, **m.groupdict()}
+
+        cast = CAST_TYPE_MAP.get(ls.cast)
+        with open(filepath) as fh:
+            for lineno, raw in enumerate(fh, 1):
+                raw = raw.strip()
+                if not raw:
+                    continue
+                parts = raw.split(ls.key_sep, 1)
+                if len(parts) != 2:
+                    continue
+                try:
+                    record: dict[str, Any] = {
+                        **file_keys,
+                        ls.line_key: cast(parts[0]),
+                    }
+                    values = parts[1].split(ls.value_sep)
+                    for idx, name in csv_metrics.items():
+                        record[name] = cast(values[idx - 1])
+                    records.append(record)
+                except (ValueError, IndexError) as exc:
+                    print(f"[scan] {filepath}:{lineno}: {exc}")
 
 
 def _file_keys_from_path(
@@ -239,7 +377,9 @@ def _file_keys_from_path(
     return keys
 
 
-def _json_stream_to_ndjson(raw: str, marker_token: str, keys: dict[str, Any]) -> str:
+def _json_stream_to_ndjson(
+    raw: str, marker_token: str, keys: dict[str, Any]
+) -> str:
     """Collapse one "bracketless array" file into NDJSON (one object per line).
 
     Whitespace is dropped (objects become single lines), a trailing comma is
@@ -253,7 +393,9 @@ def _json_stream_to_ndjson(raw: str, marker_token: str, keys: dict[str, Any]) ->
         return ""
     meta_body = json.dumps(keys, separators=(",", ":"))[1:-1]
     obj_open = (
-        marker_token if not meta_body else "{" + meta_body + "," + marker_token[1:]
+        marker_token
+        if not meta_body
+        else "{" + meta_body + "," + marker_token[1:]
     )
     tagged = flat.replace(marker_token, obj_open)
     # objects separated by a comma (usual) or just adjacent braces (tolerated)
@@ -280,7 +422,8 @@ def _csv_path_regex(root_dirs: list[str], schema: ScanSchema) -> str:
     prefix = (
         re.escape(str(root_dirs[0]).rstrip("/"))
         if len(root_dirs) == 1
-        else "(?:%s)" % "|".join(re.escape(str(root).rstrip("/")) for root in root_dirs)
+        else "(?:%s)"
+        % "|".join(re.escape(str(root).rstrip("/")) for root in root_dirs)
     )
     return f"^{prefix}/{body}$"
 
@@ -296,4 +439,9 @@ def _cast_dtype(cast: str):
     return None
 
 
-__all__ = ["scan_csv", "scan_csv_lazy", "scan_json"]
+__all__ = [
+    "scan_csv",
+    "scan_csv_lazy",
+    "scan_csv_with_key_separator",
+    "scan_json",
+]
