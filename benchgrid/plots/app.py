@@ -614,6 +614,14 @@ def render_pairs(
 
     st.pyplot(fig)
 
+    st.download_button(
+        "Download pair data (CSV)",
+        frame.write_csv().encode(),
+        file_name=f"{spec.y_metric}_vs_{spec.x_metric}.csv",
+        mime="text/csv",
+        key=f"{stem}_csv",
+    )
+
 
 def run(adapter: PlotsAdapter, tabs: Sequence[Tab]) -> None:
     """
