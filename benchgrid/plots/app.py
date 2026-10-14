@@ -36,6 +36,8 @@ from typing import Any
 
 import polars as pl
 import streamlit as st
+import matplotlib.pyplot as plt
+from adjustText import adjust_text
 
 from ..data import Matrix, _agg_expr
 from . import charts, preprocess
@@ -59,7 +61,11 @@ CURVE_HEIGHT = 512
 
 
 def select_step(
-    ctx: TabContext, *, label: str | None = None, key: str = "tab", default: Any = None
+    ctx: TabContext,
+    *,
+    label: str | None = None,
+    key: str = "tab",
+    default: Any = None,
 ) -> Any:
     """
     Render the tab body's step selector and set ``ctx.step``.
@@ -78,7 +84,9 @@ def select_step(
         ctx.step = None
         return None
     source = adapter.distinct_source or next(iter(ctx.dataset.sources))
-    values = sorted(v for v in ctx.dataset.distinct(source, step_key) if v is not None)
+    values = sorted(
+        v for v in ctx.dataset.distinct(source, step_key) if v is not None
+    )
     if not values:
         ctx.step = None
         return None
@@ -93,11 +101,17 @@ def select_step(
 
 def _load_ds(adapter: PlotsAdapter) -> Any:
     """Load (and cache) the dataset once per session, via ``adapter.load``."""
-    loader = adapter.load if adapter.load is not None else lambda: default_load(adapter)
+    loader = (
+        adapter.load
+        if adapter.load is not None
+        else lambda: default_load(adapter)
+    )
     return st.cache_resource(loader)()
 
 
-def _sidebar(adapter: PlotsAdapter, ds) -> tuple[dict[str, Any], str, list[str]]:
+def _sidebar(
+    adapter: PlotsAdapter, ds
+) -> tuple[dict[str, Any], str, list[str]]:
     """Sidebar widgets; returns (fixed filters, agg, x_keys)."""
     dest = adapter.distinct_source or next(iter(ds.sources))
     st.sidebar.header("Data filters")
@@ -196,7 +210,9 @@ def _render_panel(ctx: TabContext, *, panel: dict, metrics: list[str]) -> bool:
     metric = st.selectbox(
         "Metric",
         metrics,
-        index=metrics.index(panel["metric"]) if panel["metric"] in metrics else 0,
+        index=metrics.index(panel["metric"])
+        if panel["metric"] in metrics
+        else 0,
         key=f"panel_{pid}_metric",
     )
     chart_kind = st.radio(
@@ -235,7 +251,11 @@ def _render_panel(ctx: TabContext, *, panel: dict, metrics: list[str]) -> bool:
     source = adapter.metric_source[metric]
     st.caption(adapter.source_labels.get(source, source))
     base = _panel_agg(
-        ctx, source=source, metric=metric, x_keys=ctx.x_keys, y_key=adapter.y_key
+        ctx,
+        source=source,
+        metric=metric,
+        x_keys=ctx.x_keys,
+        y_key=adapter.y_key,
     )
     if base.is_empty():
         st.info("No data for this panel with the current filters.")
@@ -359,7 +379,8 @@ def _available_metrics(ctx: TabContext) -> list[str]:
     return [
         metric
         for metric in adapter.metrics
-        if metric in keys.get(adapter.metric_source.get(metric, ""), frozenset())
+        if metric
+        in keys.get(adapter.metric_source.get(metric, ""), frozenset())
     ]
 
 
@@ -454,7 +475,7 @@ def _pair_key(spec: PairPlotSpec) -> str:
     )
 
 
-def render_pairs(
+def render_pairs_altair(
     ctx: TabContext, spec: PairPlotSpec, *, key: str | None = None
 ) -> None:
     """
@@ -515,6 +536,85 @@ def render_pairs(
     )
 
 
+def render_pairs(
+    ctx: TabContext, spec: PairPlotSpec, *, key: str | None = None
+) -> None:
+    LABEL_COL = "_label"
+
+    # == Setup ==
+    stem = f"pairs_{key or _pair_key(spec)}"
+    select_step(ctx, key=stem)
+    options = _available_metrics(ctx)
+    for metric in (spec.x_metric, spec.y_metric):
+        if metric not in options:
+            options.insert(0, metric)
+
+    y_metric = st.selectbox(
+        "Y metric",
+        options,
+        index=options.index(spec.y_metric),
+        key=f"{stem}_y",
+    )
+    x_metric = st.selectbox(
+        "X metric",
+        options,
+        index=options.index(spec.x_metric),
+        key=f"{stem}_x",
+    )
+    if y_metric != spec.y_metric or x_metric != spec.x_metric:
+        spec = replace(spec, y_metric=y_metric, x_metric=x_metric)
+
+    use_logx = st.checkbox("Use log-scale on X-axis", value=False)
+    use_logy = st.checkbox("Use log-scale on Y-axis", value=False)
+
+    # == Render ==
+    frame = pair_frame(ctx, spec, agg=ctx.agg)
+    if frame.is_empty():
+        st.info("No paired data with the current filters.")
+        return
+    if LABEL_COL not in frame:
+        st.error(f"Column '{LABEL_COL}' not in plotting frame.")
+        return
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+
+    labels = frame[LABEL_COL].unique()
+    texts = []
+    for label in labels:
+        subdf = frame.filter(pl.col(LABEL_COL) == label)
+        points_x = subdf[x_metric]
+        points_y = subdf[y_metric]
+        ax.scatter(points_x, points_y, label=label, s=60, alpha=0.7)
+
+        # Store text results for latter adjustment:
+        for i, label in enumerate(subdf[spec.text_key]):
+            t = ax.text(
+                points_x[i], points_y[i], label, ha="center", va="center"
+            )
+            texts.append(t)
+
+    # == Common config ==
+    if use_logx:
+        ax.set_xscale("log")
+    if use_logy:
+        ax.set_yscale("log")
+
+    labels = (x_metric, y_metric)
+    ax.set_xlabel(labels[0])
+    ax.set_ylabel(labels[1])
+    # if title:
+    #     ax.set_title(title)
+    ax.grid(True, alpha=0.3)
+    ax.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+    # plt.tight_layout()
+
+    if not use_logx and not use_logy:
+        # adjust_text only works on non-log scales.
+        adjust_text(texts, ax=ax, force_static=(5.0, 5.0))
+
+    st.pyplot(fig)
+
+
 def run(adapter: PlotsAdapter, tabs: Sequence[Tab]) -> None:
     """
     Run the viewer: load the data, build the sidebar, render *tabs*.
@@ -539,7 +639,9 @@ def run(adapter: PlotsAdapter, tabs: Sequence[Tab]) -> None:
         return
 
     fixed, agg, x_keys = _sidebar(adapter, ds)
-    ctx = TabContext(adapter=adapter, dataset=ds, filters=fixed, agg=agg, x_keys=x_keys)
+    ctx = TabContext(
+        adapter=adapter, dataset=ds, filters=fixed, agg=agg, x_keys=x_keys
+    )
     for tab, spec in zip(st.tabs([tab.label for tab in tabs]), tabs):
         with tab:
             spec.render(ctx)

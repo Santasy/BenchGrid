@@ -30,7 +30,13 @@ from typing import Any
 import pandas as pd
 import polars as pl
 
-__all__ = ["heatmap", "bars_3d", "bars_3d_interactive", "lines_chart", "scatter"]
+__all__ = [
+    "heatmap",
+    "bars_3d",
+    "bars_3d_interactive",
+    "lines_chart",
+    "scatter",
+]
 
 
 def _records(data: Any) -> list[dict]:
@@ -52,7 +58,14 @@ def _no_data(kind: str, title: str) -> Any:
         import matplotlib.pyplot as plt  # noqa: PLC0415
 
         fig, ax = plt.subplots()
-        ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
+        ax.text(
+            0.5,
+            0.5,
+            "No data",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+        )
         ax.axis("off")
         fig.suptitle(title)
         return fig
@@ -113,7 +126,9 @@ def heatmap(
         alt.Tooltip(f"{metric}:Q", format=".4g"),
     ]
     if color_field is not None:
-        hexes = sorted({str(r.get(color_field)) for r in records if r.get(color_field)})
+        hexes = sorted(
+            {str(r.get(color_field)) for r in records if r.get(color_field)}
+        )
         # never pass scale=None: Altair reads it as "no scale" (see _x_axis).
         color_kw: dict[str, Any] = (
             {"scale": alt.Scale(domain=hexes, range=hexes)} if hexes else {}
@@ -191,8 +206,12 @@ def bars_3d(
         return _no_data("3D static", title or metric)
 
     try:
-        x_vals = sorted({r[x_key] for r in records}, key=lambda v: (str(type(v)), v))
-        y_vals = sorted({r[y_key] for r in records}, key=lambda v: (str(type(v)), v))
+        x_vals = sorted(
+            {r[x_key] for r in records}, key=lambda v: (str(type(v)), v)
+        )
+        y_vals = sorted(
+            {r[y_key] for r in records}, key=lambda v: (str(type(v)), v)
+        )
     except TypeError:
         x_vals = sorted({str(r[x_key]) for r in records})
         y_vals = sorted({str(r[y_key]) for r in records})
@@ -290,8 +309,12 @@ def bars_3d_interactive(
         return _no_data("3D interactive", title or metric)
 
     try:
-        x_vals = sorted({r[x_key] for r in records}, key=lambda v: (str(type(v)), v))
-        y_vals = sorted({r[y_key] for r in records}, key=lambda v: (str(type(v)), v))
+        x_vals = sorted(
+            {r[x_key] for r in records}, key=lambda v: (str(type(v)), v)
+        )
+        y_vals = sorted(
+            {r[y_key] for r in records}, key=lambda v: (str(type(v)), v)
+        )
     except TypeError:
         x_vals = sorted({str(r[x_key]) for r in records})
         y_vals = sorted({str(r[y_key]) for r in records})
@@ -318,7 +341,8 @@ def bars_3d_interactive(
     color_lookup = None
     if color_field is not None:
         color_lookup = {
-            (str(r.get(x_key)), str(r.get(y_key))): r[color_field] for r in records
+            (str(r.get(x_key)), str(r.get(y_key))): r[color_field]
+            for r in records
         }
 
     traces: list[Any] = []
@@ -328,7 +352,9 @@ def bars_3d_interactive(
         if color_field is not None and color_lookup is not None:
             color = color_lookup[(x_lbl, y_lbl)]
         else:
-            color = mcolors.to_hex(cmap(mcolors.Normalize(vmin=vmin, vmax=vmax)(h)))
+            color = mcolors.to_hex(
+                cmap(mcolors.Normalize(vmin=vmin, vmax=vmax)(h))
+            )
         traces.append(
             go.Mesh3d(
                 x=[x0, x1, x1, x0, x0, x1, x1, x0],
@@ -377,10 +403,14 @@ def bars_3d_interactive(
         height=700,
         scene=dict(
             xaxis=dict(
-                tickvals=list(range(len(x_labels))), ticktext=x_labels, title=x_key
+                tickvals=list(range(len(x_labels))),
+                ticktext=x_labels,
+                title=x_key,
             ),
             yaxis=dict(
-                tickvals=list(range(len(y_labels))), ticktext=y_labels, title=y_key
+                tickvals=list(range(len(y_labels))),
+                ticktext=y_labels,
+                title=y_key,
             ),
             zaxis=dict(title=metric),
         ),
@@ -460,7 +490,9 @@ def lines_chart(
 
     # The encodings below reference columns by name only, and Altair ships the
     # whole frame, so a wrong key renders a silent blank chart: check them here.
-    missing = [key for key in (x_key, y_key, color_key) if key not in df.columns]
+    missing = [
+        key for key in (x_key, y_key, color_key) if key not in df.columns
+    ]
     if missing:
         raise KeyError(
             f"lines_chart: column(s) {missing} not in data; "
@@ -471,14 +503,19 @@ def lines_chart(
     y = _y_axis(y_key, log_y)
 
     base = alt.Chart(df, title=title or y_key).properties(height=height)
-    line = base.mark_line(point=alt.OverlayMarkDef(filled=True, size=70)).encode(
+    line = base.mark_line(
+        point=alt.OverlayMarkDef(filled=True, size=70)
+    ).encode(
         x=x,
         y=y,
         color=alt.Color(f"{color_key}:N", title=color_key),
     )
     if text_key and text_key in df.columns:
         labels = base.mark_text(dy=-10, fontSize=10).encode(
-            x=x, y=y, text=_text_alt(df, text_key), color=alt.Color(f"{color_key}:N")
+            x=x,
+            y=y,
+            text=_text_alt(df, text_key),
+            color=alt.Color(f"{color_key}:N"),
         )
         return (line + labels).properties(height=height)
     return line
@@ -517,15 +554,29 @@ def scatter(
     x = _x_axis(x_key, log_x)
     y = _y_axis(y_key, log_y)
 
-    base = alt.Chart(df, title=title).properties(height=height)
+    base = (
+        alt.Chart(df, title=title)
+        .properties(height=height)
+        .transform_window(median_val=f"median({y_key})", groupby=[color_key])
+    )
     mark = base.mark_point(filled=True, size=size, opacity=0.85)
-    text = _text_alt(df, text_key) if text_key and text_key in df.columns else None
+    text = (
+        _text_alt(df, text_key) if text_key and text_key in df.columns else None
+    )
 
     if color_key:
         color = alt.Color(f"{color_key}:N", title=color_key)
         points = mark.encode(x=x, y=y, color=color)
         labels = (
-            base.mark_text(dy=-10, fontSize=10).encode(x=x, y=y, text=text, color=color)
+            base.mark_text(
+                dx=0.0,  # alt.expr(alt.expr.if_(alt.datum.b >= 0, 10, -20)),
+                dy=alt.expr(
+                    alt.expr.if_(
+                        alt.datum[y_key] >= alt.datum.median_val, 10, -10
+                    )
+                ),
+                fontSize=10,
+            ).encode(x=x, y=y, text=text, color=color)
             if text is not None
             else None
         )

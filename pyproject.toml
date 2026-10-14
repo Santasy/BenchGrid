@@ -16,6 +16,7 @@ dependencies = [
     "streamlit",
     "altair",
     "plotly",  # Only used by benchgrid.plots.charts.bars_3d_interactive (lazy import)
+    "adjustText", # Avoid overlap on matplot text annotations on plotted points.
 ]
 
 [tool.hatch.version]
