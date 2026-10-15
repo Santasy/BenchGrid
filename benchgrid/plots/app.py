@@ -608,9 +608,10 @@ def render_pairs(
     ax.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
     # plt.tight_layout()
 
-    if not use_logx and not use_logy:
-        # adjust_text only works on non-log scales.
-        adjust_text(texts, ax=ax, force_static=(5.0, 5.0))
+    # adjust labels:
+    # if not use_logx and not use_logy:
+    #     # adjust_text only works on non-log scales.
+    #     adjust_text(texts, ax=ax, force_static=(5.0, 5.0))
 
     st.pyplot(fig)
 
