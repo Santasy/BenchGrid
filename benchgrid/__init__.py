@@ -30,7 +30,7 @@ Because plans are plain data they can be inspected, serialised, asserted
 against and merged before a single process is spawned.
 """
 
-__version__ = "1.3.1"
+__version__ = "1.3.2"
 
 # === Shared engine ===
 # === Data / analysis layer (schema-driven Polars scan + query) ===

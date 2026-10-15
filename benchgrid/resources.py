@@ -5,7 +5,7 @@ import os
 
 def available_cpus(cpu_reserve: int = 1) -> int:
     """Return usable cores after holding back ``cpu_reserve`` cores."""
-    total = os.cpu_count() or 1
+    total = os.cpu_count(logical=False) or 1
     return max(1, total - max(0, int(cpu_reserve)))
 
 
