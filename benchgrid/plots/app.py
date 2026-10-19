@@ -37,7 +37,6 @@ from typing import Any
 import polars as pl
 import streamlit as st
 import matplotlib.pyplot as plt
-from adjustText import adjust_text
 
 from ..data import Matrix, _agg_expr
 from . import charts, preprocess
