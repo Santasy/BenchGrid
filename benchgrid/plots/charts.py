@@ -26,6 +26,7 @@ map 1:1 to the sorted data values, same order as the heatmap.
 from __future__ import annotations
 
 from typing import Any
+from dataclasses import dataclass, field
 
 import pandas as pd
 import polars as pl
@@ -36,7 +37,18 @@ __all__ = [
     "bars_3d_interactive",
     "lines_chart",
     "scatter",
+    "MatplotChartResultData",
 ]
+
+
+@dataclass
+class MatplotChartResultData:
+    x_points: Iterable = field(default_factory=list)
+    y_points: Iterable = field(default_factory=list)
+    z_points: Iterable | None = None
+    texts: Iterable | None = None
+    markers: Iterable | None = None
+    colors: Iterable | None = None
 
 
 def _records(data: Any) -> list[dict]:

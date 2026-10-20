@@ -29,6 +29,7 @@ matplotlib, plotly or streamlit.
 
 from . import charts, coloring, pairs, preprocess
 from .adapter import PlotsAdapter, Tab, default_load
+from .charts import MatplotChartResultData
 from .coloring import COLOR_FIELD, Coloring
 from .context import TabContext
 from .curves import CurvePlotSpec, curve_frame
@@ -51,4 +52,5 @@ __all__ = [
     "pair_frame",
     "pairs",
     "preprocess",
+    "MatplotChartResultData",
 ]

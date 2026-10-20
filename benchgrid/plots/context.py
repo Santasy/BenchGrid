@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 import polars as pl
 
-from ..data import _filter_frame
+from ..data import _filter_frame, final_rows
 
 if TYPE_CHECKING:
     from ..data import Dataset
@@ -44,17 +44,16 @@ class TabContext:
         The *source* frame with the sidebar filters and *step* applied.
 
         With *final*, keep only the last measure per run — the maximum
-        *adapter.progress_key* within *adapter.run_keys* — i.e. the comparable
-        per-run value of the selected step for cumulative samplers.
+        *adapter.progress_key* within *adapter.run_keys* (the shared last-of
+        rule, :func:`~benchgrid.data.final_rows`) — i.e. the comparable
+        per-run value of the selected step for cumulative samplers.  The step
+        is applied *first*, so *final* is that step's final measure (for
+        insert_only: the greatest ``n`` of the selected step).
         """
         df = _filter_frame(self.dataset.frame(source), self.filters)
         step_key = self.adapter.step_key
         if self.step is not None and step_key:
             df = df.filter(pl.col(step_key) == self.step)
-        progress_key = self.adapter.progress_key
-        if final and progress_key:
-            df = df.filter(
-                pl.col(progress_key)
-                == pl.col(progress_key).max().over(list(self.adapter.run_keys))
-            )
+        if final and self.adapter.progress_key:
+            df = final_rows(df, self.adapter.run_keys, self.adapter.progress_key)
         return df

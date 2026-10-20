@@ -7,8 +7,9 @@ introspection, final-sample extraction, reductions over dimensions and pivot mat
 Everything in the query pipeline stays DataFrame-native — filters, group-bys,
 pivots and reductions run in Polars.
 
-- :meth:`Dataset.final_sample` — the last measure per run (e.g. the maximum
-  ``n`` row of a cumulative sampler), the comparable per-run value.
+- :func:`final_rows` / :meth:`Dataset.final_sample` — the last measure per run
+  (e.g. the maximum ``n`` row of a cumulative sampler), the comparable
+  per-run value.
 - :meth:`Dataset.aggregate` — reduce one metric by any method over group keys.
 - :meth:`Dataset.matrix` — a rows x cols pivot of one metric, renderable as
   aligned terminal text or CSV (:class:`Matrix`).
@@ -29,7 +30,7 @@ import polars as pl
 
 from .schema import ScanSchema
 
-__all__ = ["Dataset", "Matrix"]
+__all__ = ["Dataset", "Matrix", "final_rows"]
 
 
 def _to_frame(data: Any) -> pl.DataFrame:
@@ -65,6 +66,21 @@ def _ordered(values: set[Any]) -> list[Any]:
     if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in values):
         return sorted(values)
     return sorted(values, key=str)
+
+
+def final_rows(df: pl.DataFrame, by: list[str], on: str) -> pl.DataFrame:
+    """
+    The last-of rule: rows where *on* equals its maximum within *by*.
+
+    Single source of truth for "the end of a run (or of one step of a run)" —
+    the frame a comparable per-run value is read from, e.g. the greatest ``n``
+    of a cumulative sampler.  Every caller (``Dataset.final_sample``, the tab
+    context's ``frame(final=True)``) must go through this so a CLI table and a
+    plot can never sample different rows::
+
+        final_rows(df, run_keys, "n")
+    """
+    return df.filter(pl.col(on) == pl.col(on).max().over(*by))
 
 
 def _agg_expr(method: str, metric: str) -> pl.Expr:
@@ -157,12 +173,11 @@ class Dataset:
         run identity *by*.
 
         For cumulative samplers this is the comparable per-run value (e.g. the
-        final ``n`` of step 1).  Equivalent to::
+        final ``n`` of step 1).  Equivalent to :func:`final_rows`::
 
-            df.filter(pl.col(on) == pl.col(on).max().over(*by))
+            final_rows(self.frame(source), by, on)
         """
-        df = self.frame(source)
-        return df.filter(pl.col(on) == pl.col(on).max().over(*by))
+        return final_rows(self.frame(source), by, on)
 
     def aggregate(
         self,

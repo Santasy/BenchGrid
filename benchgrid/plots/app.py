@@ -31,7 +31,7 @@ diverge.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Any
 
 import polars as pl
@@ -538,7 +538,11 @@ def render_pairs_altair(
 def render_pairs(
     ctx: TabContext, spec: PairPlotSpec, *, key: str | None = None
 ) -> None:
+    import textalloc
+
     LABEL_COL = "_label"
+
+    results = charts.MatplotChartResultData()
 
     # == Setup ==
     stem = f"pairs_{key or _pair_key(spec)}"
@@ -578,25 +582,44 @@ def render_pairs(
     fig, ax = plt.subplots(figsize=(12, 6))
 
     labels = frame[LABEL_COL].unique()
-    texts = []
+    results.texts = []
+    results.markers = []
+    results.colors = []
     for label in labels:
         subdf = frame.filter(pl.col(LABEL_COL) == label)
         points_x = subdf[x_metric]
         points_y = subdf[y_metric]
+
+        # TODO: Add color list to 'c' parameter.
         ax.scatter(points_x, points_y, label=label, s=60, alpha=0.7)
 
-        # Store text results for latter adjustment:
-        for i, label in enumerate(subdf[spec.text_key]):
-            t = ax.text(
-                points_x[i], points_y[i], label, ha="center", va="center"
-            )
-            texts.append(t)
+        results.x_points.extend(points_x)
+        results.y_points.extend(points_y)
 
-    # == Common config ==
+        # Store text results for latter adjustment:
+        t = subdf[spec.text_key]
+        results.texts.extend(t)
+
+    # Transform before reallocating points text.
     if use_logx:
         ax.set_xscale("log")
     if use_logy:
         ax.set_yscale("log")
+
+    textalloc.allocate(
+        ax,
+        results.x_points,
+        results.y_points,
+        results.texts,
+        x_scatter=results.x_points,
+        y_scatter=results.y_points,
+        textsize=4,
+        # avoid_crossing_label_lines=True,
+        # avoid_label_lines_overlap=True,
+        min_distance=0.006,
+        max_distance=0.08,
+        # direction="southeast"
+    )
 
     labels = (x_metric, y_metric)
     ax.set_xlabel(labels[0])
