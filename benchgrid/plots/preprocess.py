@@ -12,6 +12,11 @@ are the slice views selected by :class:`~.coloring.Coloring`:
 :func:`winner_fields` ("best version per slice") and :func:`mm_fields`
 ("min-max per slice"), both parameterized by *group_keys* — normally the
 y/slice dimension(s) — and *direction*.
+
+Workload-declared presentation is read through the ``plot_*`` convention
+(:data:`PLOT_LABEL`, :data:`PLOT_COLOR`, :data:`PLOT_MARKER`): frames
+decorated with those columns at load time override the generic series label,
+color and marker in the matplotlib sinks — see :func:`plot_columns`.
 """
 
 from __future__ import annotations
@@ -22,6 +27,16 @@ import polars as pl
 
 #: Column the curve/pair derives write: the identity keys joined with "·".
 LABEL_KEY = "_label"
+
+#: Workload-declared per-series presentation — the ``plot_*`` convention
+#: (kept name-compatible with the legacy full-routine frames).  A frame
+#: carrying them gets its own legend name, color and marker in the matplotlib
+#: sinks; without them the sinks fall back to the generic series label.
+PLOT_LABEL: str = "plot_label"
+PLOT_COLOR: str = "plot_color"
+PLOT_MARKER: str = "plot_marker"
+#: The presentation columns, in the order they are checked/carried.
+PLOT_COLUMNS: tuple[str, ...] = (PLOT_LABEL, PLOT_COLOR, PLOT_MARKER)
 
 #: Version palette used by :func:`winner_fields` for the winning cells.
 VERSION_COLORS: list[str] = [
@@ -58,6 +73,17 @@ def identity_label(keys: list[str], *, sep: str = "·") -> pl.Expr:
     series per unique combination of its keys, named by that combination.
     """
     return pl.concat_str([pl.col(key).cast(pl.Utf8) for key in keys], separator=sep)
+
+
+def plot_columns(df: Any) -> list[str]:
+    """
+    The ``plot_*`` presentation columns present in *df*.
+
+    Non-empty only when the workload decorated its frames with the series
+    presentation (e.g. at load time); the derives carry them through and the
+    matplotlib sinks honour them (see :data:`PLOT_COLUMNS`).
+    """
+    return [c for c in PLOT_COLUMNS if c in df.columns]
 
 
 def winner_fields(
@@ -128,4 +154,15 @@ def mm_fields(
     )
 
 
-__all__ = ["LABEL_KEY", "identity_label", "x_label", "winner_fields", "mm_fields"]
+__all__ = [
+    "LABEL_KEY",
+    "PLOT_COLOR",
+    "PLOT_COLUMNS",
+    "PLOT_LABEL",
+    "PLOT_MARKER",
+    "identity_label",
+    "plot_columns",
+    "winner_fields",
+    "mm_fields",
+    "x_label",
+]

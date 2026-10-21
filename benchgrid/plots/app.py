@@ -37,6 +37,7 @@ from typing import Any
 import polars as pl
 import streamlit as st
 import matplotlib.pyplot as plt
+import io
 
 from ..data import Matrix, _agg_expr
 from . import charts, preprocess
@@ -45,6 +46,7 @@ from .coloring import COLOR_FIELD, Coloring, color_frame, slice_keys
 from .context import TabContext
 from .curves import LABEL_KEY, CurvePlotSpec, curve_frame
 from .pairs import PairPlotSpec, pair_frame
+from .preprocess import PLOT_COLOR, PLOT_LABEL, PLOT_MARKER
 
 __all__ = [
     "default_load",
@@ -57,6 +59,8 @@ __all__ = [
 
 #: Chart height (px) of a curve or trade-off tab — more room than a panel.
 CURVE_HEIGHT = 512
+
+DEFAULT_DPI = 2048
 
 
 def select_step(
@@ -474,6 +478,23 @@ def _pair_key(spec: PairPlotSpec) -> str:
     )
 
 
+def _series_style(frame: pl.DataFrame, series: pl.DataFrame) -> dict[str, Any]:
+    """
+    Matplotlib kwargs for one series from the frame's ``plot_*`` columns.
+
+    Empty when the frame carries no presentation columns; otherwise the
+    series' ``plot_color`` / ``plot_marker`` (constant within the series, so
+    the first non-null value wins).
+    """
+    style: dict[str, Any] = {}
+    for column, kw in ((PLOT_COLOR, "color"), (PLOT_MARKER, "marker")):
+        if column in frame.columns:
+            values = series[column].drop_nulls()
+            if len(values):
+                style[kw] = values[0]
+    return style
+
+
 def render_pairs_altair(
     ctx: TabContext, spec: PairPlotSpec, *, key: str | None = None
 ) -> None:
@@ -536,69 +557,125 @@ def render_pairs_altair(
 
 
 def render_pairs(
-    ctx: TabContext, spec: PairPlotSpec, *, key: str | None = None
+    ctx: TabContext,
+    spec: PairPlotSpec,
+    *,
+    key: str | None = None,
+    dpi: int | None = DEFAULT_DPI,
+    fig_size: Tuple[int] | None = None,
 ) -> None:
-    import textalloc
+    """
+    Plot *spec*'s paired metrics and offer the plotted frame as CSV.
 
-    LABEL_COL = "_label"
+    One scatter point per configuration, one series per color key.  When the
+    plotting frame carries the workload's ``plot_*`` presentation columns
+    (attached at load time; see :func:`~benchgrid.plots.preprocess.plot_columns`)
+    every series is drawn with its own legend name (``plot_label``), color
+    (``plot_color``) and marker (``plot_marker``); otherwise the generic
+    ``_label`` identity and matplotlib's default marker are used.
+    """
+    import textalloc  # noqa: PLC0415 — only this matplotlib sink needs it
 
     results = charts.MatplotChartResultData()
 
     # == Setup ==
     stem = f"pairs_{key or _pair_key(spec)}"
     select_step(ctx, key=stem)
+
     options = _available_metrics(ctx)
     for metric in (spec.x_metric, spec.y_metric):
         if metric not in options:
             options.insert(0, metric)
+    with st.container(horizontal=True):
+        y_metric = st.selectbox(
+            "Y metric",
+            options,
+            index=options.index(spec.y_metric),
+            key=f"{stem}_y",
+        )
+        x_metric = st.selectbox(
+            "X metric",
+            options,
+            index=options.index(spec.x_metric),
+            key=f"{stem}_x",
+        )
+        if y_metric != spec.y_metric or x_metric != spec.x_metric:
+            spec = replace(spec, y_metric=y_metric, x_metric=x_metric)
 
-    y_metric = st.selectbox(
-        "Y metric",
-        options,
-        index=options.index(spec.y_metric),
-        key=f"{stem}_y",
-    )
-    x_metric = st.selectbox(
-        "X metric",
-        options,
-        index=options.index(spec.x_metric),
-        key=f"{stem}_x",
-    )
-    if y_metric != spec.y_metric or x_metric != spec.x_metric:
-        spec = replace(spec, y_metric=y_metric, x_metric=x_metric)
+    with st.container(horizontal=True):
+        x_label = st.text_input("x-axis metric label", value="")
+        y_label = st.text_input("y-axis metric label", value="")
 
-    use_logx = st.checkbox("Use log-scale on X-axis", value=False)
-    use_logy = st.checkbox("Use log-scale on Y-axis", value=False)
+    _default_width, _default_height = fig_size if fig_size else (5, 5)
+    cont = st.container(horizontal=True)
+    with cont:
+        op_width = st.number_input(
+            "Plot width:",
+            min_value=0,
+            max_value=20,
+            value=_default_width,
+            width=80,
+        )
+        op_height = st.number_input(
+            "Plot height:",
+            min_value=0,
+            max_value=20,
+            value=_default_height,
+            width=80,
+        )
+
+        use_logx = st.checkbox("Use log-scale on X-axis", value=spec.log_x)
+        use_logy = st.checkbox("Use log-scale on Y-axis", value=spec.log_y)
+
+        # avoid_crossing_label_lines=True,
+        # avoid_label_lines_overlap=True,
+        op_avoid_crossing = st.checkbox(
+            "Avoid crossing label lines", value=True
+        )
+        op_avoid_overlap = st.checkbox("Avoid label lines overlap", value=True)
 
     # == Render ==
     frame = pair_frame(ctx, spec, agg=ctx.agg)
     if frame.is_empty():
         st.info("No paired data with the current filters.")
         return
-    if LABEL_COL not in frame:
-        st.error(f"Column '{LABEL_COL}' not in plotting frame.")
+    if LABEL_KEY not in frame:
+        st.error(f"Column '{LABEL_KEY}' not in plotting frame.")
         return
 
-    fig, ax = plt.subplots(figsize=(12, 6))
+    fig, ax = plt.subplots(figsize=(op_width, op_height))
 
-    labels = frame[LABEL_COL].unique()
+    label_col = PLOT_LABEL if PLOT_LABEL in frame.columns else LABEL_KEY
+    labels = frame[label_col].unique()
     results.texts = []
     results.markers = []
     results.colors = []
     for label in labels:
-        subdf = frame.filter(pl.col(LABEL_COL) == label)
+        subdf = frame.filter(pl.col(label_col) == label)
         points_x = subdf[x_metric]
         points_y = subdf[y_metric]
+        count = len(points_x)
 
-        # TODO: Add color list to 'c' parameter.
-        ax.scatter(points_x, points_y, label=label, s=60, alpha=0.7)
+        style = _series_style(frame, subdf)
+        ax.scatter(
+            points_x,
+            points_y,
+            label=label,
+            s=60,
+            alpha=0.7,
+            **style,
+        )
 
         results.x_points.extend(points_x)
         results.y_points.extend(points_y)
 
-        # Store text results for latter adjustment:
+        # Store texts, color and marker for latter adjustment:
         t = subdf[spec.text_key]
         results.texts.extend(t)
+        if "color" in style:
+            results.colors.extend([style["color"]] * count)
+        if "marker" in style:
+            results.markers.extend([style["marker"]] * count)
 
     # Transform before reallocating points text.
     if use_logx:
@@ -613,15 +690,16 @@ def render_pairs(
         results.texts,
         x_scatter=results.x_points,
         y_scatter=results.y_points,
-        textsize=4,
-        # avoid_crossing_label_lines=True,
-        # avoid_label_lines_overlap=True,
+        textsize=8,
+        avoid_crossing_label_lines=op_avoid_crossing,
+        avoid_label_lines_overlap=op_avoid_overlap,
         min_distance=0.006,
         max_distance=0.08,
         # direction="southeast"
+        linecolor=results.colors,
     )
 
-    labels = (x_metric, y_metric)
+    labels = (x_label or x_metric, y_label or y_metric)
     ax.set_xlabel(labels[0])
     ax.set_ylabel(labels[1])
     # if title:
@@ -630,17 +708,24 @@ def render_pairs(
     ax.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
     # plt.tight_layout()
 
-    # adjust labels:
-    # if not use_logx and not use_logy:
-    #     # adjust_text only works on non-log scales.
-    #     adjust_text(texts, ax=ax, force_static=(5.0, 5.0))
+    st.pyplot(fig, width="content")
 
-    st.pyplot(fig)
+    fname = f"{spec.y_metric}-vs-{spec.x_metric}"
+
+    img = io.BytesIO()
+    plt.savefig(img, format="pdf", dpi=dpi, bbox_inches="tight")
+
+    st.download_button(
+        label="Download image",
+        data=img,
+        file_name=f"{fname}.pdf",
+        mime="application/pdf",
+    )
 
     st.download_button(
         "Download pair data (CSV)",
         frame.write_csv().encode(),
-        file_name=f"{spec.y_metric}_vs_{spec.x_metric}.csv",
+        file_name=f"{fname}.csv",
         mime="text/csv",
         key=f"{stem}_csv",
     )

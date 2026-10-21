@@ -21,7 +21,7 @@ import polars as pl
 
 from ..data import _agg_expr, _filter_frame
 from .context import TabContext
-from .preprocess import LABEL_KEY, identity_label
+from .preprocess import LABEL_KEY, identity_label, plot_columns
 
 __all__ = ["PairPlotSpec", "pair_frame"]
 
@@ -61,6 +61,9 @@ def pair_frame(
     (``ctx.frame(source, final=True)``), reduced over seeds by *agg* and joined
     on the configuration keys (inner: no pair, no point).  The result carries
     the keys, both metrics and :data:`~benchgrid.plots.preprocess.LABEL_KEY`.
+    A frame decorated with the ``plot_*`` presentation columns keeps them too
+    (constant per series, so reduced with ``first()`` per side) — the
+    matplotlib sinks honour them (see :func:`~benchgrid.plots.preprocess.plot_columns`).
     """
     adapter = ctx.adapter
     keys = list(dict.fromkeys([*spec.color_keys, *spec.point_keys]))
@@ -78,11 +81,24 @@ def pair_frame(
             frame = _filter_frame(
                 frame, {k: v for k, v in spec.filters.items() if k in frame.columns}
             )
+        presentation = plot_columns(frame)
         return frame.group_by(keys, maintain_order=True).agg(
-            _agg_expr(agg, metric).alias(metric)
+            _agg_expr(agg, metric).alias(metric),
+            *(pl.col(c).first().alias(c) for c in presentation),
         )
 
-    pairs = side(spec.x_metric).join(side(spec.y_metric), on=keys, how="inner")
+    left = side(spec.x_metric)
+    right = side(spec.y_metric)
+    pairs = left.join(right, on=keys, how="inner")
+    # Both sides carry the same presentation columns; keep one copy of each.
+    duplicated = [c for c in plot_columns(left) if c in right.columns]
+    if duplicated:
+        pairs = pairs.with_columns(
+            [
+                pl.coalesce([pl.col(c), pl.col(f"{c}_right")]).alias(c)
+                for c in duplicated
+            ]
+        ).drop([f"{c}_right" for c in duplicated])
     return pairs.with_columns(identity_label(spec.color_keys).alias(LABEL_KEY)).sort(
         keys
     )
