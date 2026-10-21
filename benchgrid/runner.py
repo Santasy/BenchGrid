@@ -8,8 +8,10 @@ the batch size) and keeps track of how many commands are running/collected.
 Completion is surfaced
 as it happens: an optional ``on_complete`` callback receives each result the
 moment its task finishes (in completion order), while ``execute`` still returns
-results in input order. Nothing here knows about building or running
-specifically — the worker callable is injected.
+results in input order. A failing task is surfaced the same way through the
+optional ``on_failure`` callback, which receives the position of the failed
+item, so the caller can name the command that broke. Nothing here knows about
+building or running specifically — the worker callable is injected.
 """
 
 import ctypes
@@ -88,7 +90,9 @@ class PoolRunner(Generic[ItemT, ResultT]):
     how the batch is progressing (``threads`` / ``running`` / ``finished``).
     Tasks are submitted with ``apply_async`` all at once; a per-task callback
     fires the instant each worker finishes, so ``on_complete`` can observe
-    results in completion order without waiting for the whole batch.
+    results in completion order without waiting for the whole batch. A worker
+    that raises is reported through ``on_failure`` (position of the failed
+    item) and re-raised once the batch has drained.
     """
 
     def __init__(
@@ -132,6 +136,7 @@ class PoolRunner(Generic[ItemT, ResultT]):
         items: Sequence[ItemT],
         *,
         on_complete: Callable[[int, ResultT], None] | None = None,
+        on_failure: Callable[[int, BaseException], None] | None = None,
     ) -> list[ResultT]:
         """
         Run ``worker`` over every item and return results in input order.
@@ -143,7 +148,10 @@ class PoolRunner(Generic[ItemT, ResultT]):
         callback observes completion order, not submission order. Callbacks run
         on the pool's internal result-handler thread and must be cheap (enqueue
         or bookkeeping only). A worker exception is captured and re-raised from
-        here after the batch has drained.
+        here after the batch has drained; when ``on_failure`` is given it is
+        invoked with ``(index, exception)`` — the position of the *failed* item
+        — so the caller can name the item that broke. The re-raised exception
+        also carries ``pool_index`` and ``pool_item`` attributes.
 
         ``threads`` (or the CPU-derived default) is clamped to the batch size;
         an empty batch executes nothing and creates no pool.
@@ -166,7 +174,7 @@ class PoolRunner(Generic[ItemT, ResultT]):
         )
 
         collected: dict[int, ResultT] = {}
-        failure: list[BaseException] = []
+        failure: list[tuple[int, BaseException]] = []
         done = Event()
 
         def _finish(index: int, result: ResultT) -> None:
@@ -178,7 +186,9 @@ class PoolRunner(Generic[ItemT, ResultT]):
                 done.set()
 
         def _fail(index: int, exc: BaseException) -> None:
-            failure.append(exc)
+            failure.append((index, exc))
+            if on_failure is not None:
+                on_failure(index, exc)
             done.set()
 
         try:
@@ -196,7 +206,13 @@ class PoolRunner(Generic[ItemT, ResultT]):
             self._total = 0
 
         if failure:
-            raise failure[0]
+            index, exc = failure[0]
+            try:
+                exc.pool_index = index  # type: ignore[attr-defined]
+                exc.pool_item = items[index]  # type: ignore[attr-defined]
+            except Exception:  # pragma: no cover - exotic exception types
+                pass
+            raise exc
         return [collected[i] for i in range(n)]
 
 

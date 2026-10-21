@@ -101,7 +101,10 @@ class WorkPlan:
     freeze_key: str | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
-        if self.iteration is IterationPolicy.FREEZE_DIMENSION and not self.freeze_key:
+        if (
+            self.iteration is IterationPolicy.FREEZE_DIMENSION
+            and not self.freeze_key
+        ):
             raise ValueError(
                 "FREEZE_DIMENSION iteration requires freeze_key (e.g. 'SEED')"
             )
@@ -124,7 +127,11 @@ class WorkPlan:
         if self.args_join is ArgsJoinPolicy.POSITIONAL:
             parts = [*self.fixed, *record.values()]
         else:
-            parts = [f"{name}={value}" for name, value in record.items() if value != ""]
+            parts = [
+                f"{name}={value}"
+                for name, value in record.items()
+                if value != ""
+            ]
         parts = [part for part in parts if part != ""]
         return f"{self.program} {' '.join(parts)}".strip()
 
@@ -209,7 +216,9 @@ def _execute_commands(
         for command in rendered:
             print(f"[{label}] {command.id:3d}: {command.command}", flush=True)
     if dry_run:
-        print(f"\n[{label}] Dry run: {len(rendered)} command(s), not executing.")
+        print(
+            f"\n[{label}] Dry run: {len(rendered)} command(s), not executing."
+        )
         return 0
     if not rendered:
         print(f"\n[{label}] Nothing to run.")
@@ -226,15 +235,35 @@ def _execute_commands(
                 flush=True,
             )
 
+        def _report_failure(index: int, exc: BaseException) -> None:
+            """Name the command that broke — the timing line's counterpart."""
+            command = batch[index]
+            print(
+                f"[{command.id:3d}] FAILED {type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            print(
+                f"[{command.id:3d}]   command: {command.command}",
+                flush=True,
+            )
+
         for command in batch:
             print(f"[{command.id:3d}] Running {command.command}", flush=True)
+        results = PoolRunner(
+            WorkCommand.execute, threads=threads, name=f"bg:{label}"
+        ).execute(
+            batch,
+            on_complete=_report_completion,
+            on_failure=_report_failure,
+        )
         outcomes.append(
-            PoolRunner(
-                WorkCommand.execute, threads=threads, name=f"bg:{label}"
-            ).execute(batch, on_complete=_report_completion)
+            [
+                (command, rc, elapsed)
+                for command, (rc, elapsed) in zip(batch, results)
+            ]
         )
 
-    outcomes: list[list[tuple[int, float]]] = []
+    outcomes: list[list[tuple[WorkCommand, int, float]]] = []
     if iteration is IterationPolicy.FREEZE_DIMENSION:
         for key, group in freeze_groups(rendered, freeze_key):
             print(
@@ -245,9 +274,19 @@ def _execute_commands(
     else:
         _execute_batch(rendered)
 
-    failed = [rc for batch in outcomes for rc, _ in batch if rc != 0]
+    failed = [
+        (command, rc)
+        for batch in outcomes
+        for command, rc, _ in batch
+        if rc != 0
+    ]
     if failed:
-        print(f"\n[{label}] {len(failed)} command(s) failed.")
+        print(f"\n[{label}] {len(failed)} command(s) failed:", flush=True)
+        for command, rc in failed:
+            print(
+                f"[{label}] [{command.id:3d}] rc={rc} {command.command}",
+                flush=True,
+            )
         return 1
     print("\n===== Finished =====")
     return 0
