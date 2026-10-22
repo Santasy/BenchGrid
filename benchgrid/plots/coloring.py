@@ -59,7 +59,7 @@ _SUFFIXES: dict[Coloring, str] = {
 
 #: The registry: coloring → frame modifier.
 _MODIFIERS: dict[Coloring, _ColorFn] = {
-    Coloring.VALUE: lambda df, metric, *, group_keys, direction: df,
+    Coloring.VALUE: lambda df, metric, *, group_keys, direction, version_key: df,
     Coloring.MINMAX: mm_fields,
     Coloring.WINNER: winner_fields,
 }
@@ -80,12 +80,15 @@ def color_frame(
     *,
     group_keys: list[str],
     direction: str | None = None,
+    version_key: str = "",
 ) -> pl.DataFrame:
     """
     Apply *coloring* to the aggregated *base* frame (the slice *group_keys*).
 
     Returns *base* unchanged for :attr:`Coloring.VALUE`, otherwise adds
-    :data:`COLOR_FIELD`; *direction* defaults to "min".
+    :data:`COLOR_FIELD`; *direction* defaults to "min".  *version_key* names
+    the column whose values share the palette (only
+    :attr:`Coloring.WINNER` reads it).
     """
     modifier = _MODIFIERS[Coloring(coloring)]
     return modifier(
@@ -93,4 +96,5 @@ def color_frame(
         metric,
         group_keys=group_keys,
         direction="min" if direction is None else direction,
+        version_key=version_key,
     )

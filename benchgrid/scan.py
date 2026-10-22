@@ -102,9 +102,11 @@ def scan_csv_lazy(
             f"conflicts={sorted(path_group_names & set(metric_cols))!r}"
         )
 
-    paths = _matching_paths(
-        root_dirs, schema, width=None if ls.ragged else len(metric_cols)
-    )
+    paths = [
+        str(path)
+        for path, _ in _iter_matching_files(root_dirs, schema)
+        if ls.ragged or _line_width_matches(path, ls, len(metric_cols))
+    ]
     if not paths:
         return _empty_lazy_frame(schema, metric_cols)
 
@@ -134,24 +136,23 @@ def scan_csv_lazy(
     )
 
 
-def _matching_paths(
-    root_dirs: list[str], schema: ScanSchema, *, width: int | None = None
-) -> list[str]:
+def _iter_matching_files(root_dirs: list[str], schema: ScanSchema):
     """
-    The files under *root_dirs* that match the schema's folder/file layout.
+    Yield ``(path, keys)`` for the files under *root_dirs* matching *schema*.
 
-    A scan reads only these, so a sibling log of another shape never reaches
-    ``pl.scan_csv`` (a one-column ``nohup``/``itall`` log would make the read
-    fail its column schema).  With *width* set (fixed-width line schema), a
-    file whose first data line has another field count is skipped too: it is
-    in a different line format (e.g. key-separated legacy rows).
+    The one walker all three readers share: folder-level + file-pattern named
+    groups become *keys* (folder levels without named groups, and optional
+    levels whose pattern misses, contribute nothing).  Extension normalisation
+    is one rule — a leading dot in ``FilePattern.extensions`` is ignored — so
+    the fast and eager paths can never disagree.  A scan reads only matching
+    files, so a sibling log of another shape never reaches the reader.
     """
     compiled_folders = [lvl.compile() for lvl in schema.folder_levels]
     compiled_file = schema.file_pattern.compile()
     extensions = {
         ext.lstrip(".") for ext in (schema.file_pattern.extensions or ["txt"])
     }
-    paths: list[str] = []
+    depth = len(schema.folder_levels) + 1
     for root in root_dirs:
         root_path = Path(root)
         if not root_path.is_dir():
@@ -162,28 +163,39 @@ def _matching_paths(
                 continue
             if path.suffix.lstrip(".") not in extensions:
                 continue
-            if (
-                len(path.relative_to(root_path).parts)
-                != len(schema.folder_levels) + 1
-            ):
+            rel = path.relative_to(root_path).parts
+            if len(rel) != depth:
                 continue
-            if (
-                _file_keys_from_path(
-                    path, root_path, schema, compiled_folders, compiled_file
-                )
-                is None
-            ):
-                continue
-            if width is not None and not _line_width_matches(
-                path, schema.line_schema, width
-            ):
-                print(
-                    f"[scan] skipping {path}: first line is not a "
-                    f"{width}-field row"
-                )
-                continue
-            paths.append(str(path))
-    return paths
+            keys = _file_keys_from_parts(
+                rel, schema, compiled_folders, compiled_file
+            )
+            if keys is not None:
+                yield path, keys
+
+
+def _file_keys_from_parts(
+    rel: tuple[str, ...],
+    schema: ScanSchema,
+    compiled_folders: list[re.Pattern],
+    compiled_file: re.Pattern,
+) -> dict[str, Any] | None:
+    """Folder-level + file-pattern named groups for one *rel* path, or None
+    when the path does not match the schema layout."""
+    keys: dict[str, Any] = {}
+    for folder_level, pattern, part in zip(
+        schema.folder_levels, compiled_folders, rel[: len(schema.folder_levels)]
+    ):
+        m = pattern.fullmatch(part)
+        if m is None:
+            if folder_level.required:
+                return None
+            continue  # optional level: pass through, no keys
+        keys.update(m.groupdict())
+    m = compiled_file.fullmatch(rel[-1])
+    if m is None:
+        return None
+    keys.update(m.groupdict())
+    return keys
 
 
 def _line_width_matches(path: Path, line_schema: Any, width: int) -> bool:
@@ -288,28 +300,12 @@ def scan_json(root_dirs: list[str], schema: ScanSchema) -> pl.DataFrame:
         )
 
     marker_token = '{"' + marker + '"'
-    compiled_folders = [lvl.compile() for lvl in schema.folder_levels]
-    compiled_file = fp.compile()
 
     parts: list[str] = []
-    for root in root_dirs:
-        root_path = Path(root)
-        if not root_path.is_dir():
-            print(f"[scan] skipping non-existent root: {root}")
-            continue
-        for path in sorted(root_path.rglob("*")):
-            if not path.is_file():
-                continue
-            if fp.extensions and path.suffix.lstrip(".") not in fp.extensions:
-                continue
-            keys = _file_keys_from_path(
-                path, root_path, schema, compiled_folders, compiled_file
-            )
-            if keys is None:
-                continue  # does not match the folder/file layout
-            parts.append(
-                _json_stream_to_ndjson(path.read_text(), marker_token, keys)
-            )
+    for path, keys in _iter_matching_files(root_dirs, schema):
+        parts.append(
+            _json_stream_to_ndjson(path.read_text(), marker_token, keys)
+        )
 
     buffer = "\n".join(p for p in parts if p)
     if not buffer:
@@ -329,8 +325,8 @@ def scan_csv_with_key_separator(
     ls = schema.line_schema
     if fp.format != "lines":
         raise ValueError(
-            f"scan_csv_lazy supports format='lines' only (got {fp.format!r}). "
-            "Use scan_json() for JSON object streams."
+            f"scan_csv_with_key_separator supports format='lines' only "
+            f"(got {fp.format!r}). Use scan_json() for JSON object streams."
         )
     if ls is None or ls.key_sep is None:
         raise ValueError(
@@ -338,134 +334,43 @@ def scan_csv_with_key_separator(
             " per line (LineSchema.key_sep). "
         )
 
-    compiled_folders = [lvl.compile() for lvl in schema.folder_levels]
-    compiled_file = schema.file_pattern.compile()
-
     records: list[dict] = []
-    for root in root_dirs:
-        root_path = Path(root)
-        if not root_path.is_dir():
-            print(f"[scan] skipping non-existent root: {root}")
-            continue
-        _walk_scan_csv_with_key_separator(
-            root_path, 0, schema, compiled_folders, compiled_file, {}, records
-        )
+    for path, file_keys in _iter_matching_files(root_dirs, schema):
+        _parse_keyed_lines(path, schema.line_schema, file_keys, records)
 
     return pl.DataFrame(records)
 
 
-def _walk_scan_csv_with_key_separator(
-    current: Path,
-    level: int,
-    schema: ScanSchema,
-    compiled_folders: list[re.Pattern],
-    compiled_file: re.Pattern,
-    inherited: dict[str, Any],
+def _parse_keyed_lines(
+    filepath: Path,
+    ls: Any,
+    file_keys: dict[str, Any],
     records: list[dict],
 ) -> None:
-    if level == len(schema.folder_levels):
-        _parse_csv_with_key_separator(
-            current, schema, compiled_file, inherited, records
-        )
-        return
-
-    pattern = compiled_folders[level]
-    folder_level = schema.folder_levels[level]
-
-    for child in sorted(current.iterdir()):
-        if not child.is_dir():
-            continue
-        m = pattern.fullmatch(child.name)
-        if m is None:
-            if folder_level.required:
-                continue
-            # Non-required level: skip unmatched dirs silently
-            continue
-        # groupdict() is {} for pass-through levels (no named groups) — intentional
-        keys = {**inherited, **m.groupdict()}
-        _walk_scan_csv_with_key_separator(
-            child,
-            level + 1,
-            schema,
-            compiled_folders,
-            compiled_file,
-            keys,
-            records,
-        )
-
-
-def _parse_csv_with_key_separator(
-    directory: Path,
-    schema: ScanSchema,
-    compiled_file: re.Pattern,
-    inherited: dict[str, Any],
-    records: list[dict],
-) -> None:
-    ls = schema.line_schema
-    valid_exts = set(schema.file_pattern.extensions)
+    """Parse one ``<key><key_sep><values...>`` file into *records*."""
     csv_metrics = dict(ls.metrics)
     csv_metrics.pop(0)  # Pop the line_key at index 0.
+    cast = CAST_TYPE_MAP.get(ls.cast)
 
-    for filepath in sorted(directory.iterdir()):
-        if not filepath.is_file():
-            continue
-        if valid_exts and filepath.suffix.lstrip(".") not in valid_exts:
-            continue
-        m = compiled_file.fullmatch(filepath.name)
-        if m is None:
-            continue
-
-        file_keys = {**inherited, **m.groupdict()}
-
-        cast = CAST_TYPE_MAP.get(ls.cast)
-        with open(filepath) as fh:
-            for lineno, raw in enumerate(fh, 1):
-                raw = raw.strip()
-                if not raw:
-                    continue
-                parts = raw.split(ls.key_sep, 1)
-                if len(parts) != 2:
-                    continue
-                try:
-                    record: dict[str, Any] = {
-                        **file_keys,
-                        ls.line_key: cast(parts[0]),
-                    }
-                    values = parts[1].split(ls.value_sep)
-                    for idx, name in csv_metrics.items():
-                        record[name] = cast(values[idx - 1])
-                    records.append(record)
-                except (ValueError, IndexError) as exc:
-                    print(f"[scan] {filepath}:{lineno}: {exc}")
-
-
-def _file_keys_from_path(
-    path: Path,
-    root_path: Path,
-    schema: ScanSchema,
-    compiled_folders: list[re.Pattern],
-    compiled_file: re.Pattern,
-) -> dict[str, Any] | None:
-    """Folder-level + file-pattern named groups for one file, or None if the
-    file does not match the schema layout."""
-    rel = path.relative_to(root_path).parts
-    if len(rel) < len(schema.folder_levels) + 1:
-        return None
-    keys: dict[str, Any] = {}
-    for folder_level, pattern, part in zip(
-        schema.folder_levels, compiled_folders, rel[: len(schema.folder_levels)]
-    ):
-        m = pattern.fullmatch(part)
-        if m is None:
-            if folder_level.required:
-                return None
-            continue  # non-required level: pass through, no keys
-        keys.update(m.groupdict())
-    m = compiled_file.fullmatch(rel[-1])
-    if m is None:
-        return None
-    keys.update(m.groupdict())
-    return keys
+    with open(filepath) as fh:
+        for lineno, raw in enumerate(fh, 1):
+            raw = raw.strip()
+            if not raw:
+                continue
+            parts = raw.split(ls.key_sep, 1)
+            if len(parts) != 2:
+                continue
+            try:
+                record: dict[str, Any] = {
+                    **file_keys,
+                    ls.line_key: cast(parts[0]),
+                }
+                values = parts[1].split(ls.value_sep)
+                for idx, name in csv_metrics.items():
+                    record[name] = cast(values[idx - 1])
+                records.append(record)
+            except (ValueError, IndexError) as exc:
+                print(f"[scan] {filepath}:{lineno}: {exc}")
 
 
 def _json_stream_to_ndjson(
@@ -473,15 +378,23 @@ def _json_stream_to_ndjson(
 ) -> str:
     """Collapse one "bracketless array" file into NDJSON (one object per line).
 
-    Whitespace is dropped (objects become single lines), a trailing comma is
-    stripped before the final object, and the schema's per-file metadata keys
-    are injected at the start of every object.  The top-level separator is
-    detected as ``},<marker_token>`` (the marker never appears inside nested
-    values).
+    Whitespace *between* objects is dropped but whitespace inside string
+    values is preserved (``pl.read_ndjson`` skips it between tokens).  A
+    trailing comma is stripped before the final object, and the schema's
+    per-file metadata keys are injected at the start of every object.  The
+    top-level separator is detected as ``},<marker_token>`` (the marker never
+    appears inside nested values).
     """
-    flat = "".join(raw.split()).rstrip(",")
-    if not flat:
+    flat = raw.rstrip().rstrip(",")
+    if not flat.strip():
         return ""
+    # Collapse whitespace between tokens only, leaving quoted strings intact:
+    # splitting on quotes keeps every odd chunk (a string body) verbatim.
+    chunks = flat.split('"')
+    for i, chunk in enumerate(chunks):
+        if i % 2 == 0:
+            chunks[i] = "".join(chunk.split())
+    flat = '"'.join(chunks)
     meta_body = json.dumps(keys, separators=(",", ":"))[1:-1]
     obj_open = (
         marker_token

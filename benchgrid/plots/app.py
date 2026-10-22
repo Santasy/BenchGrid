@@ -31,7 +31,7 @@ diverge.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from typing import Any
 
 import polars as pl
@@ -49,7 +49,9 @@ from .pairs import PairPlotSpec, pair_frame
 from .preprocess import PLOT_COLOR, PLOT_LABEL, PLOT_MARKER
 
 __all__ = [
+    "available_metrics",
     "default_load",
+    "load_dataset",
     "render_curve",
     "render_panels",
     "render_pairs",
@@ -75,6 +77,7 @@ def select_step(
     label: str | None = None,
     key: str = "tab",
     default: Any = None,
+    values_filter: Callable[[str], bool] | None = None,
 ) -> Any:
     """
     Render the tab body's step selector and set ``ctx.step``.
@@ -85,7 +88,9 @@ def select_step(
     lowest value.  Returns the selected step, or ``None`` when the adapter
     declares no ``step_key`` or the column is empty.  *key* namespaces the
     widget per tab; *label* defaults to ``adapter.step_label`` so every view of
-    one workload names its step dimension the same way.
+    one workload names its step dimension the same way.  *values_filter* (a
+    ``value → bool`` predicate) narrows the offered values, e.g. one tab that
+    lists only the generation steps.
     """
     adapter = ctx.adapter
     step_key = adapter.step_key
@@ -94,7 +99,9 @@ def select_step(
         return None
     source = adapter.distinct_source or next(iter(ctx.dataset.sources))
     values = sorted(
-        v for v in ctx.dataset.distinct(source, step_key) if v is not None
+        v
+        for v in ctx.dataset.distinct(source, step_key)
+        if v is not None and (values_filter is None or values_filter(v))
     )
     if not values:
         ctx.step = None
@@ -108,7 +115,7 @@ def select_step(
     return ctx.step
 
 
-def _load_ds(adapter: PlotsAdapter) -> Any:
+def load_dataset(adapter: PlotsAdapter) -> Any:
     """Load (and cache) the dataset once per session, via ``adapter.load``."""
     loader = (
         adapter.load
@@ -279,6 +286,7 @@ def _render_panel(ctx: TabContext, *, panel: dict, metrics: list[str]) -> bool:
                 adapter.y_key, adapter.color_group_extras, base.columns
             ),
             direction=direction,
+            version_key=adapter.version_key,
         )
         if coloring.needs_direction
         else None
@@ -321,12 +329,27 @@ def _render_panel(ctx: TabContext, *, panel: dict, metrics: list[str]) -> bool:
     return remove
 
 
-def render_panels(ctx: TabContext) -> None:
-    """Dynamic grid of metric panels, two per row, from ``adapter.default_panels``."""
+def render_panels(
+    ctx: TabContext,
+    *,
+    cols_per_row: int = 2,
+    caption: str | None = None,
+    step: bool = True,
+    step_key: str = "panels",
+) -> None:
+    """
+    Dynamic grid of metric panels from ``adapter.default_panels``.
+
+    *cols_per_row* sets the grid width, *caption* replaces the default
+    coloring explainer (``""`` hides it), and *step* (with *step_key*) toggles
+    the body-header step selector.  Workloads whose filters live in the tab
+    body call ``select_step`` themselves and pass ``step=False``.
+    """
     adapter = ctx.adapter
-    select_step(ctx, key="panels")
+    if step:
+        select_step(ctx, key=step_key)
     panels = _init_panel_state(adapter)
-    metrics = _available_metrics(ctx)
+    metrics = available_metrics(ctx)
     if not metrics:
         st.warning("No plottable metrics declared in the adapter.")
         return
@@ -344,27 +367,30 @@ def render_panels(ctx: TabContext) -> None:
                 }
             )
     with header[1]:
-        described = {
-            Coloring.VALUE: "the metric-value colormap",
-            Coloring.WINNER: "only the winning row of each slice keeps a color",
-            Coloring.MINMAX: "every cell/bar is filled by its position within "
-            "the slice (best green, worst red)",
-        }
-        st.caption(
-            "Each panel plots any metric from any source; its metric and one of "
-            f"{len(adapter.chart_kinds)} chart kinds are independent. Colorings "
-            "available here: "
-            + "; ".join(
-                f"“{c.value}” — {described[c]}"
-                for c in adapter.colorings
-                if c in described
+        if caption is None:
+            described = {
+                Coloring.VALUE: "the metric-value colormap",
+                Coloring.WINNER: "only the winning row of each slice keeps a color",
+                Coloring.MINMAX: "every cell/bar is filled by its position within "
+                "the slice (best green, worst red)",
+            }
+            caption = (
+                "Each panel plots any metric from any source; its metric and one "
+                f"of {len(adapter.chart_kinds)} chart kinds are independent. "
+                "Colorings available here: "
+                + "; ".join(
+                    f"“{c.value}” — {described[c]}"
+                    for c in adapter.colorings
+                    if c in described
+                )
+                + "."
             )
-            + "."
-        )
+        if caption:
+            st.caption(caption)
 
     remove_ids: set[int] = set()
-    for i in range(0, len(panels), 2):
-        row = st.columns(2)
+    for i in range(0, len(panels), cols_per_row):
+        row = st.columns(cols_per_row)
         for j, col in enumerate(row):
             idx = i + j
             if idx >= len(panels):
@@ -376,7 +402,7 @@ def render_panels(ctx: TabContext) -> None:
         panels[:] = [p for p in panels if p["id"] not in remove_ids]
 
 
-def _available_metrics(ctx: TabContext) -> list[str]:
+def available_metrics(ctx: TabContext) -> list[str]:
     """
     The adapter's declared metrics whose column exists in its source frame.
 
@@ -419,7 +445,7 @@ def render_curve(
     adapter = ctx.adapter
     stem = f"curve_{key or _spec_key(spec)}"
     select_step(ctx, key=stem)
-    options = _available_metrics(ctx)
+    options = available_metrics(ctx)
     if spec.metric not in options:
         options.insert(0, spec.metric)
     metric = st.selectbox(
@@ -524,7 +550,7 @@ def render_pairs_altair(
     stem = f"pairs_{key or _pair_key(spec)}"
     select_step(ctx, key=stem)
     extra = filters(ctx) if filters is not None else {}
-    options = _available_metrics(ctx)
+    options = available_metrics(ctx)
     for metric in (spec.x_metric, spec.y_metric):
         if metric not in options:
             options.insert(0, metric)
@@ -603,7 +629,7 @@ def render_pairs(
     select_step(ctx, key=stem)
     extra = filters(ctx) if filters is not None else {}
 
-    options = _available_metrics(ctx)
+    options = available_metrics(ctx)
     for metric in (spec.x_metric, spec.y_metric):
         if metric not in options:
             options.insert(0, metric)
@@ -691,8 +717,8 @@ def render_pairs(
         results.y_points.extend(points_y)
 
         # Store texts, color and marker for latter adjustment:
-        t = subdf[spec.text_key]
-        results.texts.extend(t)
+        if spec.text_key is not None:
+            results.texts.extend(subdf[spec.text_key])
         if "color" in style:
             results.colors.extend([style["color"]] * count)
         if "marker" in style:
@@ -704,22 +730,23 @@ def render_pairs(
     if use_logy:
         ax.set_yscale("log")
 
-    textalloc.allocate(
-        ax,
-        results.x_points,
-        results.y_points,
-        results.texts,
-        x_scatter=results.x_points,
-        y_scatter=results.y_points,
-        textsize=8,
-        avoid_crossing_label_lines=op_avoid_crossing,
-        avoid_label_lines_overlap=op_avoid_overlap,
-        min_distance=0.006,
-        max_distance=0.08,
-        # direction="southeast"
-        linecolor=results.colors or "r",
-        textcolor=results.colors or "r",
-    )
+    if results.texts:
+        textalloc.allocate(
+            ax,
+            results.x_points,
+            results.y_points,
+            results.texts,
+            x_scatter=results.x_points,
+            y_scatter=results.y_points,
+            textsize=8,
+            avoid_crossing_label_lines=op_avoid_crossing,
+            avoid_label_lines_overlap=op_avoid_overlap,
+            min_distance=0.006,
+            max_distance=0.08,
+            # direction="southeast"
+            linecolor=results.colors or "r",
+            textcolor=results.colors or "black",
+        )
 
     labels = (x_label or x_metric, y_label or y_metric)
     ax.set_xlabel(labels[0])
@@ -747,7 +774,7 @@ def render_pairs(
         )
 
         img = io.BytesIO()
-        plt.savefig(img, format="pdf", dpi=dpi, bbox_inches="tight")
+        fig.savefig(img, format="pdf", dpi=dpi, bbox_inches="tight")
         st.download_button(
             label="Download image",
             data=img,
@@ -767,7 +794,7 @@ def run(adapter: PlotsAdapter, tabs: Sequence[Tab]) -> None:
     st.set_page_config(layout="wide", page_title=adapter.title)
     st.title(adapter.title)
 
-    ds = _load_ds(adapter)
+    ds = load_dataset(adapter)
     if all(ds.frame(source).is_empty() for source in ds.sources):
         st.warning(
             "No data found under the adapter's data dirs. Point the adapter at a "

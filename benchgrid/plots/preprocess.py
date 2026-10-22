@@ -93,11 +93,16 @@ def winner_fields(
     group_keys: list[str],
     direction: str = "min",
     palette: list[str] | None = None,
-    version_key: str = "version",
+    version_key: str,
 ) -> pl.DataFrame:
     """
     Add ``_winner`` (best metric per *group_keys* slice) and ``_color``
-    (version color for winners, :data:`LOSER_COLOR` otherwise).
+    (a distinct palette color per *version_key* value for winners,
+    :data:`LOSER_COLOR` otherwise).
+
+    *version_key* is required: it names the column whose distinct values share
+    the palette among winners.  When the column is absent from *df* every row
+    gets :data:`LOSER_COLOR` (no winner can be distinguished).
     """
     best = pl.col(metric).min() if direction == "min" else pl.col(metric).max()
     best_val = df.group_by(group_keys).agg(best.alias("_best"))
@@ -109,7 +114,7 @@ def winner_fields(
         versions = {
             v: i for i, v in enumerate(dict.fromkeys(out[version_key].to_list()))
         }
-        win_color = pl.col(version_key).replace(
+        win_color = pl.col(version_key).replace_strict(
             {v: palette[i % len(palette)] for v, i in versions.items()},
             default=LOSER_COLOR,
         )
@@ -130,10 +135,14 @@ def mm_fields(
     group_keys: list[str],
     direction: str = "min",
     cmap: str = SLICE_CMAP,
+    version_key: str = "",
 ) -> pl.DataFrame:
     """
     Add ``_norm`` (0 = best within each *group_keys* slice, 1 = worst) and
     ``_color`` (slice cmap hex for that position).
+
+    *version_key* is unused here (the slice itself carries the color); it keeps
+    the modifier signature uniform with :func:`winner_fields`.
     """
     import matplotlib  # noqa: PLC0415 — matplotlib stays a plots-only dep
     import matplotlib.colors as mcolors  # noqa: PLC0415

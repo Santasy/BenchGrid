@@ -84,7 +84,9 @@ class PlotsAdapter:
     :class:`~.coloring.Coloring`); *color_group_extras* extends the per-slice
     coloring group (normally ``[y_key]``) with columns that must *not* compete
     in the slice, e.g. the outer struct key so winners are chosen per
-    (struct, y).  *default_panels* pre-fills the metrics/compare panels tab.
+    (struct, y).  *version_key* names the column whose values share a palette
+    in the "best per slice" coloring; *default_panels* pre-fills the metrics
+    panels tab.
 
     Hook
     ----
@@ -101,6 +103,9 @@ class PlotsAdapter:
     metric_source: dict[str, str]
     source_metrics: dict[str, list[str]]
     run_keys: list[str]
+    #: Default x axis (multi → combined label) and the rows/color slice.
+    x_keys: list[str]
+    y_key: str
     progress_key: str = "n"
     step_key: str | None = "step"
     #: Value the step selector starts on (the lowest one otherwise).  Declared
@@ -110,9 +115,7 @@ class PlotsAdapter:
     #: Label of the step selector every view opens with.
     step_label: str = "Step"
     dims: list[str] = field(default_factory=list)
-    x_keys: list[str] = field(default_factory=lambda: ["struct_symbol", "version"])
-    y_key: str = "node_bytes"
-    color_group_extras: list[str] = field(default_factory=lambda: ["struct_symbol"])
+    color_group_extras: list[str] = field(default_factory=list)
     best_direction: dict[str, str] = field(default_factory=dict)
     agg_methods: list[str] = field(
         default_factory=lambda: ["mean", "min", "max", "median"]
@@ -125,8 +128,10 @@ class PlotsAdapter:
     colorings: list[Coloring] = field(default_factory=lambda: list(Coloring))
     default_panels: list[dict] = field(default_factory=list)
     source_labels: dict[str, str] = field(default_factory=dict)
-    version_key: str = "version"
-    agg_label: str = "Aggregation over seeds"
+    #: Column whose distinct values share the palette in the "best per slice"
+    #: coloring.  Empty = no version column → every row is a loser color.
+    version_key: str = ""
+    agg_label: str = "Aggregation"
     compare_label: str = ""
     enrich: dict[str, EnrichFn] = field(default_factory=dict)
     load: Callable[[], "Any"] | None = None  # replaces default_load if set

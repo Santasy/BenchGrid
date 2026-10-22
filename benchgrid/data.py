@@ -221,10 +221,7 @@ class Dataset:
         With *output* = a path or open file, writes there and returns None.
         With *output* = None, returns the CSV as bytes.
         """
-        buf = io.StringIO()
-        with buf:
-            self.frame(source).write_csv(buf)
-        csv_bytes = buf.getvalue().encode()
+        csv_bytes = self.frame(source).write_csv().encode()
 
         if output is None:
             return csv_bytes
@@ -232,7 +229,7 @@ class Dataset:
             Path(output).write_bytes(csv_bytes)
             print(f"[benchgrid] wrote {output}")
         else:
-            output.write(buf.getvalue())
+            output.write(csv_bytes.decode())
         return None
 
 
