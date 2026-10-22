@@ -5,11 +5,11 @@ Two vectorized fast paths read the whole tree in one call and extract the
 per-file metadata (folder levels + file-pattern named groups) from the scanned
 path, so there is no per-file Python loop:
 
-- :func:`scan_csv_lazy` — plain-column ``format="lines"`` sources (one glob per
-  extension, ``pl.scan_csv``), returns a lazy frame; chain filters/aggregations
-  and ``.collect()`` once.  ``LineSchema.ragged`` switches the read to
-  whole-line + positional split, so a tree whose rows have different widths
-  still scans in one pass.
+- :func:`scan_csv_lazy` — plain-column ``format="lines"`` sources (the tree is
+  resolved to the schema's matching files first, then ``pl.scan_csv``), returns
+  a lazy frame; chain filters/aggregations and ``.collect()`` once.
+  ``LineSchema.ragged`` switches the read to whole-line + positional split, so
+  a tree whose rows have different widths still scans in one pass.
 - :func:`scan_json` — ``format="json"`` object streams (the "bracketless
   array" formulation: objects joined by commas, no ``[...]``), collapsed to
   NDJSON and parsed with a single ``pl.read_ndjson``.  Nested values stay
@@ -56,6 +56,11 @@ def scan_csv_lazy(
     as strings (matching the legacy ``scan`` semantics); line values are typed
     with ``LineSchema.cast``.
 
+    Only files that match the schema layout are read: sibling logs of another
+    shape (``nohup``, ``itall``, …) are filtered out *before* the read, so they
+    cannot break the column schema.  A tree with no matching file yields an
+    empty frame carrying the schema's columns.
+
     With ``LineSchema.ragged`` the rows of one tree may have different widths:
     the tree is read whole-line and split on ``value_sep``, then column *i* is
     ``null`` where a row is shorter.  Unknown trailing fields are dropped.  A
@@ -97,17 +102,18 @@ def scan_csv_lazy(
             f"conflicts={sorted(path_group_names & set(metric_cols))!r}"
         )
 
-    globs = [
-        f"{str(root).rstrip('/')}/**/*.{ext.lstrip('.')}"
-        for root in root_dirs
-        for ext in (fp.extensions or ["txt"])
-    ]
+    paths = _matching_paths(
+        root_dirs, schema, width=None if ls.ragged else len(metric_cols)
+    )
+    if not paths:
+        return _empty_lazy_frame(schema, metric_cols)
+
     if ls.ragged:
-        lf = _scan_ragged(globs, metric_cols, ls, path_column)
+        lf = _scan_ragged(paths, metric_cols, ls, path_column)
     else:
         dtype = _cast_dtype(ls.cast)
         lf = pl.scan_csv(
-            globs,
+            paths,
             has_header=False,
             new_columns=metric_cols,
             separator=ls.value_sep or ";",
@@ -128,8 +134,93 @@ def scan_csv_lazy(
     )
 
 
+def _matching_paths(
+    root_dirs: list[str], schema: ScanSchema, *, width: int | None = None
+) -> list[str]:
+    """
+    The files under *root_dirs* that match the schema's folder/file layout.
+
+    A scan reads only these, so a sibling log of another shape never reaches
+    ``pl.scan_csv`` (a one-column ``nohup``/``itall`` log would make the read
+    fail its column schema).  With *width* set (fixed-width line schema), a
+    file whose first data line has another field count is skipped too: it is
+    in a different line format (e.g. key-separated legacy rows).
+    """
+    compiled_folders = [lvl.compile() for lvl in schema.folder_levels]
+    compiled_file = schema.file_pattern.compile()
+    extensions = {
+        ext.lstrip(".") for ext in (schema.file_pattern.extensions or ["txt"])
+    }
+    paths: list[str] = []
+    for root in root_dirs:
+        root_path = Path(root)
+        if not root_path.is_dir():
+            print(f"[scan] skipping non-existent root: {root}")
+            continue
+        for path in sorted(root_path.rglob("*")):
+            if not path.is_file():
+                continue
+            if path.suffix.lstrip(".") not in extensions:
+                continue
+            if (
+                len(path.relative_to(root_path).parts)
+                != len(schema.folder_levels) + 1
+            ):
+                continue
+            if (
+                _file_keys_from_path(
+                    path, root_path, schema, compiled_folders, compiled_file
+                )
+                is None
+            ):
+                continue
+            if width is not None and not _line_width_matches(
+                path, schema.line_schema, width
+            ):
+                print(
+                    f"[scan] skipping {path}: first line is not a "
+                    f"{width}-field row"
+                )
+                continue
+            paths.append(str(path))
+    return paths
+
+
+def _line_width_matches(path: Path, line_schema: Any, width: int) -> bool:
+    """Whether the first non-empty line has *width* separator-split fields."""
+    sep = (line_schema.value_sep if line_schema is not None else None) or ";"
+    try:
+        with path.open() as fh:
+            for raw in fh:
+                line = raw.strip()
+                if line:
+                    return len(line.split(sep)) == width
+    except OSError as exc:
+        print(f"[scan] skipping unreadable file {path}: {exc}")
+        return False
+    return True
+
+
+def _empty_lazy_frame(
+    schema: ScanSchema, metric_cols: list[str]
+) -> pl.LazyFrame:
+    """An empty frame carrying the scan's full column set (no matching file)."""
+    ls = schema.line_schema
+    metric_dtype = _cast_dtype(ls.cast) if ls is not None else None
+    fields: dict[str, Any] = {}
+    for pattern in [
+        *(lvl.pattern for lvl in schema.folder_levels),
+        schema.file_pattern.pattern,
+    ]:
+        for name in re.findall(r"\?P<(\w+)>", pattern):
+            fields[name] = pl.Utf8
+    for name in metric_cols:
+        fields[name] = metric_dtype or pl.Utf8
+    return pl.LazyFrame(schema=fields)
+
+
 def _scan_ragged(
-    globs: list[str],
+    paths: list[str],
     metric_cols: list[str],
     line_schema: Any,
     path_column: str,
@@ -142,7 +233,7 @@ def _scan_ragged(
     with ``null`` when the row is shorter — still one pass, no per-file loop.
     """
     lf = pl.scan_csv(
-        globs,
+        paths,
         has_header=False,
         new_columns=[_LINE_KEY],
         separator=_LINE_SENTINEL,

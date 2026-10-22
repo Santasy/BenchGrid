@@ -52,7 +52,11 @@ class PairPlotSpec:
 
 
 def pair_frame(
-    ctx: TabContext, spec: PairPlotSpec, *, agg: str = "mean"
+    ctx: TabContext,
+    spec: PairPlotSpec,
+    *,
+    agg: str = "mean",
+    filters: dict[str, Any] | None = None,
 ) -> pl.DataFrame:
     """
     One row per (*color_keys*, *point_keys*) with both axis metrics.
@@ -64,6 +68,10 @@ def pair_frame(
     A frame decorated with the ``plot_*`` presentation columns keeps them too
     (constant per series, so reduced with ``first()`` per side) — the
     matplotlib sinks honour them (see :func:`~benchgrid.plots.preprocess.plot_columns`).
+
+    *filters* are extra row filters (the workload's own, e.g. one refinement
+    level); they narrow both sides like :attr:`PairPlotSpec.filters` and win
+    over them.
     """
     adapter = ctx.adapter
     keys = list(dict.fromkeys([*spec.color_keys, *spec.point_keys]))
@@ -77,9 +85,11 @@ def pair_frame(
 
     def side(metric: str) -> pl.DataFrame:
         frame = ctx.frame(adapter.metric_source[metric], final=True)
-        if spec.filters:
+        row_filters = {**spec.filters, **(filters or {})}
+        if row_filters:
             frame = _filter_frame(
-                frame, {k: v for k, v in spec.filters.items() if k in frame.columns}
+                frame,
+                {k: v for k, v in row_filters.items() if k in frame.columns},
             )
         presentation = plot_columns(frame)
         return frame.group_by(keys, maintain_order=True).agg(

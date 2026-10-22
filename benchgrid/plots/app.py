@@ -30,7 +30,7 @@ diverge.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -61,6 +61,12 @@ __all__ = [
 CURVE_HEIGHT = 512
 
 DEFAULT_DPI = 2048
+
+#: The workload's filter hook: it renders the tab's own filter widgets and
+#: returns the row filters to apply to the plotted frame (e.g.
+#: ``{"refinement": 5, "nelems": "005"}``).  The renderer calls it right below
+#: its step selector, so the workload's filters see the selected step.
+FilterHook = Callable[[TabContext], dict[str, Any]]
 
 
 def select_step(
@@ -496,7 +502,11 @@ def _series_style(frame: pl.DataFrame, series: pl.DataFrame) -> dict[str, Any]:
 
 
 def render_pairs_altair(
-    ctx: TabContext, spec: PairPlotSpec, *, key: str | None = None
+    ctx: TabContext,
+    spec: PairPlotSpec,
+    *,
+    key: str | None = None,
+    filters: FilterHook | None = None,
 ) -> None:
     """
     Plot *spec*'s paired metrics and offer the plotted frame as CSV.
@@ -506,9 +516,14 @@ def render_pairs_altair(
     ``spec.y_metric`` / ``spec.x_metric``.  Each point is the final measure of
     the selected step, reduced over seeds by ``ctx.agg`` (see
     :func:`~.pairs.pair_frame`).
+
+    *filters* is the workload's filter hook: it renders the tab's own filter
+    widgets (right below the step selector) and returns the row filters to
+    apply to the plotted frame.
     """
     stem = f"pairs_{key or _pair_key(spec)}"
     select_step(ctx, key=stem)
+    extra = filters(ctx) if filters is not None else {}
     options = _available_metrics(ctx)
     for metric in (spec.x_metric, spec.y_metric):
         if metric not in options:
@@ -529,7 +544,7 @@ def render_pairs_altair(
     if y_metric != spec.y_metric or x_metric != spec.x_metric:
         spec = replace(spec, y_metric=y_metric, x_metric=x_metric)
 
-    frame = pair_frame(ctx, spec, agg=ctx.agg)
+    frame = pair_frame(ctx, spec, agg=ctx.agg, filters=extra)
     if frame.is_empty():
         st.info("No paired data with the current filters.")
         return
@@ -562,7 +577,8 @@ def render_pairs(
     *,
     key: str | None = None,
     dpi: int | None = DEFAULT_DPI,
-    fig_size: Tuple[int] | None = None,
+    fig_size: tuple[int] | None = None,
+    filters: FilterHook | None = None,
 ) -> None:
     """
     Plot *spec*'s paired metrics and offer the plotted frame as CSV.
@@ -573,6 +589,10 @@ def render_pairs(
     every series is drawn with its own legend name (``plot_label``), color
     (``plot_color``) and marker (``plot_marker``); otherwise the generic
     ``_label`` identity and matplotlib's default marker are used.
+
+    *filters* is the workload's filter hook: it renders the tab's own filter
+    widgets (right below the step selector) and returns the row filters to
+    apply to the plotted frame.
     """
     import textalloc  # noqa: PLC0415 — only this matplotlib sink needs it
 
@@ -581,6 +601,7 @@ def render_pairs(
     # == Setup ==
     stem = f"pairs_{key or _pair_key(spec)}"
     select_step(ctx, key=stem)
+    extra = filters(ctx) if filters is not None else {}
 
     options = _available_metrics(ctx)
     for metric in (spec.x_metric, spec.y_metric):
@@ -635,7 +656,7 @@ def render_pairs(
         op_avoid_overlap = st.checkbox("Avoid label lines overlap", value=True)
 
     # == Render ==
-    frame = pair_frame(ctx, spec, agg=ctx.agg)
+    frame = pair_frame(ctx, spec, agg=ctx.agg, filters=extra)
     if frame.is_empty():
         st.info("No paired data with the current filters.")
         return
@@ -696,7 +717,8 @@ def render_pairs(
         min_distance=0.006,
         max_distance=0.08,
         # direction="southeast"
-        linecolor=results.colors,
+        linecolor=results.colors or "r",
+        textcolor=results.colors or "r",
     )
 
     labels = (x_label or x_metric, y_label or y_metric)
@@ -710,25 +732,28 @@ def render_pairs(
 
     st.pyplot(fig, width="content")
 
-    fname = f"{spec.y_metric}-vs-{spec.x_metric}"
+    _step_name = ctx.step
+    _extra_tags = "_".join([f"{dim}-{val}" for dim, val in extra.items()])
+    _extra_tags += "_" if _extra_tags else ""
+    fname = f"{_step_name}_{_extra_tags}{spec.y_metric}-vs-{spec.x_metric}"
 
-    img = io.BytesIO()
-    plt.savefig(img, format="pdf", dpi=dpi, bbox_inches="tight")
+    with st.container(horizontal=True):
+        st.download_button(
+            "Download pair data (CSV)",
+            frame.write_csv().encode(),
+            file_name=f"{fname}.csv",
+            mime="text/csv",
+            key=f"{stem}_csv",
+        )
 
-    st.download_button(
-        label="Download image",
-        data=img,
-        file_name=f"{fname}.pdf",
-        mime="application/pdf",
-    )
-
-    st.download_button(
-        "Download pair data (CSV)",
-        frame.write_csv().encode(),
-        file_name=f"{fname}.csv",
-        mime="text/csv",
-        key=f"{stem}_csv",
-    )
+        img = io.BytesIO()
+        plt.savefig(img, format="pdf", dpi=dpi, bbox_inches="tight")
+        st.download_button(
+            label="Download image",
+            data=img,
+            file_name=f"{fname}.pdf",
+            mime="application/pdf",
+        )
 
 
 def run(adapter: PlotsAdapter, tabs: Sequence[Tab]) -> None:
