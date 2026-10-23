@@ -683,6 +683,8 @@ def render_pairs(
 
     # == Render ==
     frame = pair_frame(ctx, spec, agg=ctx.agg, filters=extra)
+    # Drop rows with no data in either selected metric.
+    frame = frame.drop_nulls([x_metric, y_metric])
     if frame.is_empty():
         st.info("No paired data with the current filters.")
         return
