@@ -8,10 +8,10 @@ trade-off derive. Runs headless, no streamlit, no framework.
 import tempfile
 from pathlib import Path
 
-from benchgrid.plots.pairs import PairPlotSpec, pair_frame
+from benchgrid.data import Dataset
 from benchgrid.plots.adapter import PlotsAdapter
 from benchgrid.plots.context import TabContext
-from benchgrid.data import Dataset
+from benchgrid.plots.pairs import PairPlotSpec, pair_frame
 from benchgrid.scan import scan_csv_lazy, scan_json
 from benchgrid.schema import ScanSchema
 

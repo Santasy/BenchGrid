@@ -30,9 +30,14 @@ the execution seam.
 import subprocess
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
+
+try:
+    import resource  # POSIX only; per-command memory caps need it
+except ImportError:  # pragma: no cover - non-POSIX platforms
+    resource = None
 
 from .runner import PoolRunner
 from .utils import Grid, expand_records
@@ -54,17 +59,39 @@ class IterationPolicy(Enum):
 
 @dataclass(frozen=True)
 class WorkCommand:
-    """One shell invocation: 1-indexed id, command, tags, and working dir."""
+    """One shell invocation: 1-indexed id, command, tags, and working dir.
+
+    ``mem_limit`` (bytes) caps the spawned process tree via ``RLIMIT_AS``;
+    ``mem_estimate`` declares the memory the command is expected to need, which
+    a pool running with ``memory_budget`` uses to bound the *sum* of the
+    concurrent commands.  Both default to ``None`` (no cap, no reservation).
+    """
 
     id: int
     command: str
     tags: Mapping[str, str] = field(default_factory=dict)
     cwd: str | Path | None = None
+    mem_limit: int | None = None
+    mem_estimate: int | None = None
 
     def execute(self) -> tuple[int, float]:
-        """Shell out to ``self.command``; returns (exit code, elapsed)."""
+        """Shell out to ``self.command``; returns (exit code, elapsed).
+
+        ``mem_limit`` is applied with ``preexec_fn`` before exec, so the shell
+        and every process it starts (wrapper script, benchmark) inherit it.
+        It bounds ONE command's address space — a runaway — not the pool sum
+        (that is what ``memory_budget`` + ``mem_estimate`` are for).
+        """
         start = time.perf_counter()
-        rc = subprocess.call(self.command, shell=True, cwd=self.cwd)
+        kwargs: dict = {}
+        if self.mem_limit is not None and resource is not None:
+            limit = self.mem_limit
+
+            def _apply_limit() -> None:
+                resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
+
+            kwargs["preexec_fn"] = _apply_limit
+        rc = subprocess.call(self.command, shell=True, cwd=self.cwd, **kwargs)
         return rc, time.perf_counter() - start
 
 
@@ -86,6 +113,8 @@ class WorkPlan:
     ``single_core`` records the expectation that each command uses one CPU
     core. With ``iteration=FREEZE_DIMENSION``, ``freeze_key`` names the
     dimension whose values are exhausted one at a time.
+    ``mem_limit``/``mem_estimate`` are stamped onto every rendered command
+    (per-command address-space cap / declared memory need for a pool budget).
     """
 
     workdir: str | Path
@@ -99,6 +128,8 @@ class WorkPlan:
         default=IterationPolicy.ALL_AT_ONCE, kw_only=True
     )
     freeze_key: str | None = field(default=None, kw_only=True)
+    mem_limit: int | None = field(default=None, kw_only=True)
+    mem_estimate: int | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         if (
@@ -147,6 +178,8 @@ class WorkPlan:
                     self.build_command(record.values),
                     tags,
                     self.cwd,
+                    mem_limit=self.mem_limit,
+                    mem_estimate=self.mem_estimate,
                 )
             )
         return commands
@@ -186,8 +219,16 @@ def execute_commands(
     parallel: bool = True,
     iteration: IterationPolicy = IterationPolicy.ALL_AT_ONCE,
     freeze_key: str | None = None,
+    mem_limit: int | None = None,
+    memory_budget: int | None = None,
 ) -> int:
-    """Execute already-rendered commands with the shared pool semantics."""
+    """Execute already-rendered commands with the shared pool semantics.
+
+    ``mem_limit`` stamps every command that carries no own limit (per-command
+    ``RLIMIT_AS`` cap); ``memory_budget`` bounds the *sum* of the commands'
+    declared ``mem_estimate`` across concurrent workers (see
+    :class:`benchgrid.runner.PoolRunner`).
+    """
     return _execute_commands(
         commands,
         label=label,
@@ -197,6 +238,8 @@ def execute_commands(
         parallel=parallel,
         iteration=iteration,
         freeze_key=freeze_key,
+        mem_limit=mem_limit,
+        memory_budget=memory_budget,
     )
 
 
@@ -210,8 +253,19 @@ def _execute_commands(
     parallel: bool,
     iteration: IterationPolicy,
     freeze_key: str | None,
+    mem_limit: int | None = None,
+    memory_budget: int | None = None,
 ) -> int:
     rendered = list(commands)
+    if mem_limit is not None:
+        rendered = [
+            (
+                command
+                if command.mem_limit is not None
+                else replace(command, mem_limit=mem_limit)
+            )
+            for command in rendered
+        ]
     if verbose or dry_run:
         for command in rendered:
             print(f"[{label}] {command.id:3d}: {command.command}", flush=True)
@@ -250,7 +304,10 @@ def _execute_commands(
         for command in batch:
             print(f"[{command.id:3d}] Running {command.command}", flush=True)
         results = PoolRunner(
-            WorkCommand.execute, threads=threads, name=f"bg:{label}"
+            WorkCommand.execute,
+            threads=threads,
+            name=f"bg:{label}",
+            memory_budget=memory_budget,
         ).execute(
             batch,
             on_complete=_report_completion,

@@ -54,7 +54,7 @@ class Tab:
     """
 
     label: str
-    render: Callable[["TabContext"], None]
+    render: Callable[[TabContext], None]
 
 
 @dataclass
@@ -134,7 +134,7 @@ class PlotsAdapter:
     agg_label: str = "Aggregation"
     compare_label: str = ""
     enrich: dict[str, EnrichFn] = field(default_factory=dict)
-    load: Callable[[], "Any"] | None = None  # replaces default_load if set
+    load: Callable[[], Any] | None = None  # replaces default_load if set
     distinct_source: str | None = None  # source whose frame drives the sidebar
 
     def best_of(self, metric: str) -> str:
@@ -142,7 +142,7 @@ class PlotsAdapter:
         return self.best_direction.get(metric, "min")
 
 
-def _scan(source: str, schema: "Any", data_dirs: list[str]):
+def _scan(source: str, schema: Any, data_dirs: list[str]):
     if schema.file_pattern.format == "json":
         return scan_json(data_dirs, schema)
     return scan_csv_lazy(data_dirs, schema)

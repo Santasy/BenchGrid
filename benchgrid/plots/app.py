@@ -30,14 +30,14 @@ diverge.
 
 from __future__ import annotations
 
+import io
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from typing import Any
 
+import matplotlib.pyplot as plt
 import polars as pl
 import streamlit as st
-import matplotlib.pyplot as plt
-import io
 
 from ..data import Matrix, _agg_expr
 from . import charts, preprocess
@@ -53,8 +53,8 @@ __all__ = [
     "default_load",
     "load_dataset",
     "render_curve",
-    "render_panels",
     "render_pairs",
+    "render_panels",
     "run",
     "select_step",
 ]
@@ -151,8 +151,13 @@ def _sidebar(
     agg = st.sidebar.selectbox(adapter.agg_label, adapter.agg_methods)
 
     st.sidebar.divider()
-    counts = "; ".join(f"{s}: {ds.frame(s).height}" for s in ds.sources)
-    st.caption(f"Records — {counts}")
+    roots = ", ".join(str(d) for d in adapter.data_dirs) or "(custom loader)"
+    st.sidebar.caption(f"**Loaded from** — {roots}")
+    parts = []
+    for source in ds.sources:
+        frame = ds.frame(source)
+        parts.append(f"{source}: {frame.height} rows × {len(frame.columns)} cols")
+    st.caption(f"**Frames** — {'; '.join(parts)}")
     return fixed, agg, x_keys
 
 
@@ -276,6 +281,28 @@ def _render_panel(ctx: TabContext, *, panel: dict, metrics: list[str]) -> bool:
     if base.is_empty():
         st.info("No data for this panel with the current filters.")
         return st.button("Remove", key=f"panel_{pid}_remove")
+
+    total = base.height
+    if total > 1:
+        kcol, dcol = st.columns(2)
+        with kcol:
+            keep = st.slider(
+                "Points to show", 1, total, total, key=f"panel_{pid}_keep"
+            )
+        with dcol:
+            side = st.radio(
+                "Keep",
+                ["best", "worst"],
+                horizontal=True,
+                key=f"panel_{pid}_keep_side",
+            )
+        if keep < total:
+            # "best" is the adapter's best_of(metric) end; coloring and the CSV
+            # below are computed on the kept rows, so the colors adapt.
+            low_is_best = adapter.best_of(metric) == "min"
+            base = base.sort(
+                metric, descending=(side == "best") != low_is_best
+            ).head(keep)
 
     colored = (
         color_frame(
@@ -620,7 +647,7 @@ def render_pairs(
     widgets (right below the step selector) and returns the row filters to
     apply to the plotted frame.
     """
-    import textalloc  # noqa: PLC0415 — only this matplotlib sink needs it
+    import textalloc
 
     results = charts.MatplotChartResultData()
 
@@ -698,7 +725,6 @@ def render_pairs(
     labels = frame[label_col].unique()
 
     baseline_frame = None
-    other_labels = []
     if (
         spec.baseline_key
         and spec.baseline_value is not None
@@ -707,15 +733,6 @@ def render_pairs(
         baseline_frame = frame.filter(
             pl.col(spec.baseline_key) == spec.baseline_value
         )
-        other_labels = [
-            l
-            for l in labels
-            if l != spec.baseline_value
-            and l not in baseline_frame[label_col].to_list()
-            if False
-        ]
-        # easier: filter by key value
-        base_mask = baseline_frame.shape[0] > 0
     else:
         baseline_frame = None
 

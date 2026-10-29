@@ -25,19 +25,20 @@ map 1:1 to the sorted data values, same order as the heatmap.
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Iterable
 from dataclasses import dataclass, field
+from typing import Any
 
 import pandas as pd
 import polars as pl
 
 __all__ = [
-    "heatmap",
+    "MatplotChartResultData",
     "bars_3d",
     "bars_3d_interactive",
+    "heatmap",
     "lines_chart",
     "scatter",
-    "MatplotChartResultData",
 ]
 
 
@@ -67,7 +68,7 @@ def _records(data: Any) -> list[dict]:
 def _no_data(kind: str, title: str) -> Any:
     """An empty-state figure matching *kind*'s library."""
     if kind == "3D static":
-        import matplotlib.pyplot as plt  # noqa: PLC0415
+        import matplotlib.pyplot as plt
 
         fig, ax = plt.subplots()
         ax.text(
@@ -82,10 +83,10 @@ def _no_data(kind: str, title: str) -> Any:
         fig.suptitle(title)
         return fig
     if kind == "3D interactive":
-        import plotly.graph_objects as go  # noqa: PLC0415
+        import plotly.graph_objects as go
 
         return go.Figure().update_layout(title=f"{title} — no data")
-    import altair as alt  # noqa: PLC0415
+    import altair as alt
 
     return (
         alt.Chart(pd.DataFrame({"msg": ["No data"]}))
@@ -121,7 +122,7 @@ def heatmap(
     color is the metric value through the *scheme* colormap (*reverse* keeps
     high values at the red end, like the legacy charts).
     """
-    import altair as alt  # noqa: PLC0415
+    import altair as alt
 
     records = _records(data)
     if not records:
@@ -178,8 +179,8 @@ def _bar_colors(
     colormap: str,
     color_field: str | None,
 ) -> tuple[list[Any], Any, Any]:
-    import matplotlib  # noqa: PLC0415
-    import matplotlib.colors as mcolors  # noqa: PLC0415
+    import matplotlib
+    import matplotlib.colors as mcolors
 
     if color_field is not None:
         return [r.get(color_field) for r in bar_records], None, None
@@ -210,8 +211,8 @@ def bars_3d(
     ``fig.savefig("out.png", dpi=150, bbox_inches="tight")``.  Unlike Plotly
     Mesh3d, ``bar3d()`` renders every bar completely regardless of camera angle.
     """
-    import matplotlib.pyplot as plt  # noqa: PLC0415
-    from mpl_toolkits.mplot3d import Axes3D  # noqa: PLC0415, F401 — '3d' projection
+    import matplotlib.pyplot as plt
+    from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 — '3d' projection
 
     records = _records(data)
     if not records:
@@ -274,7 +275,7 @@ def bars_3d(
     ax.set_title(title or metric, pad=14)
 
     if norm is not None:
-        from matplotlib import cm  # noqa: PLC0415
+        from matplotlib import cm
 
         mappable = cm.ScalarMappable(norm=norm, cmap=cmap)
         mappable.set_array([])
@@ -312,9 +313,9 @@ def bars_3d_interactive(
     Returns a ``plotly.graph_objects.Figure`` — display with
     ``st.plotly_chart()`` or export as HTML with ``fig.write_html("out.html")``.
     """
-    import matplotlib  # noqa: PLC0415
-    import matplotlib.colors as mcolors  # noqa: PLC0415
-    import plotly.graph_objects as go  # noqa: PLC0415
+    import matplotlib
+    import matplotlib.colors as mcolors
+    import plotly.graph_objects as go
 
     records = _records(data)
     if not records:
@@ -394,16 +395,16 @@ def bars_3d_interactive(
                 y=[None],
                 z=[None],
                 mode="markers",
-                marker=dict(
-                    colorscale=colormap,
-                    color=[vmin, vmax],
-                    cmin=vmin,
-                    cmax=vmax,
-                    showscale=True,
-                    colorbar=dict(title=metric, thickness=16, len=0.7),
-                    size=1,
-                    opacity=0,
-                ),
+                marker={
+                    "colorscale": colormap,
+                    "color": [vmin, vmax],
+                    "cmin": vmin,
+                    "cmax": vmax,
+                    "showscale": True,
+                    "colorbar": {"title": metric, "thickness": 16, "len": 0.7},
+                    "size": 1,
+                    "opacity": 0,
+                },
                 showlegend=False,
                 hoverinfo="skip",
             )
@@ -413,19 +414,19 @@ def bars_3d_interactive(
     fig.update_layout(
         title=title or metric,
         height=700,
-        scene=dict(
-            xaxis=dict(
-                tickvals=list(range(len(x_labels))),
-                ticktext=x_labels,
-                title=x_key,
-            ),
-            yaxis=dict(
-                tickvals=list(range(len(y_labels))),
-                ticktext=y_labels,
-                title=y_key,
-            ),
-            zaxis=dict(title=metric),
-        ),
+        scene={
+            "xaxis": {
+                "tickvals": list(range(len(x_labels))),
+                "ticktext": x_labels,
+                "title": x_key,
+            },
+            "yaxis": {
+                "tickvals": list(range(len(y_labels))),
+                "ticktext": y_labels,
+                "title": y_key,
+            },
+            "zaxis": {"title": metric},
+        },
     )
     return fig
 
@@ -437,7 +438,7 @@ def bars_3d_interactive(
 
 def _text_alt(df: pd.DataFrame, key: str):
     """Altair text field for *key*: integer, 3-digit float or nominal."""
-    import altair as alt  # noqa: PLC0415
+    import altair as alt
 
     if pd.api.types.is_integer_dtype(df[key]):
         return alt.Text(f"{key}:Q", format="d")
@@ -453,7 +454,7 @@ def _x_axis(key: str, log: bool):
     ``scale=None`` as *no scale*, which drops the axis and draws the marks in
     raw data coordinates.
     """
-    import altair as alt  # noqa: PLC0415
+    import altair as alt
 
     kwargs: dict[str, Any] = {"title": key}
     if log:
@@ -463,7 +464,7 @@ def _x_axis(key: str, log: bool):
 
 def _y_axis(key: str, log: bool):
     """Altair quantitative y axis for *key*, optionally log-scaled (see :func:`_x_axis`)."""
-    import altair as alt  # noqa: PLC0415
+    import altair as alt
 
     kwargs: dict[str, Any] = {"title": key}
     if log:
@@ -490,7 +491,7 @@ def lines_chart(
     achieving a growth-curve envelope).  *log_x*/*log_y* log the axes;
     *height* is the figure height in pixels (curves want more than a heatmap).
     """
-    import altair as alt  # noqa: PLC0415
+    import altair as alt
 
     records = _records(data)
     if not records:
@@ -553,7 +554,7 @@ def scatter(
     lower-left cloud.  With *text_key* each point carries a label (e.g. the
     target node size).  Axes are numeric; *log_x*/*log_y* log them.
     """
-    import altair as alt  # noqa: PLC0415
+    import altair as alt
 
     records = _records(data)
     if not records:

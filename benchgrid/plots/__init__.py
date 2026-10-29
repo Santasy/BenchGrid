@@ -41,6 +41,7 @@ __all__ = [
     "LABEL_KEY",
     "Coloring",
     "CurvePlotSpec",
+    "MatplotChartResultData",
     "PairPlotSpec",
     "PlotsAdapter",
     "Tab",
@@ -52,5 +53,4 @@ __all__ = [
     "pair_frame",
     "pairs",
     "preprocess",
-    "MatplotChartResultData",
 ]

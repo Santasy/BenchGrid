@@ -144,8 +144,8 @@ def mm_fields(
     *version_key* is unused here (the slice itself carries the color); it keeps
     the modifier signature uniform with :func:`winner_fields`.
     """
-    import matplotlib  # noqa: PLC0415 — matplotlib stays a plots-only dep
-    import matplotlib.colors as mcolors  # noqa: PLC0415
+    import matplotlib
+    import matplotlib.colors as mcolors
 
     lo = pl.col(metric).min().over(group_keys)
     hi = pl.col(metric).max().over(group_keys)
@@ -170,8 +170,8 @@ __all__ = [
     "PLOT_LABEL",
     "PLOT_MARKER",
     "identity_label",
+    "mm_fields",
     "plot_columns",
     "winner_fields",
-    "mm_fields",
     "x_label",
 ]

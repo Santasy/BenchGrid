@@ -211,7 +211,7 @@ class Dataset:
         method: str = "mean",
         *,
         label: str | None = None,
-    ) -> "Matrix":
+    ) -> Matrix:
         """
         Pivot *metric* as rows(rows) × columns(cols).
 
@@ -269,7 +269,7 @@ class Matrix:
         metric: str,
         *,
         title: str = "",
-    ) -> "Matrix":
+    ) -> Matrix:
         """
         Build a Matrix from an aggregated frame with columns [rows, cols, metric].
 
@@ -293,7 +293,7 @@ class Matrix:
 
     def to_dataframe(self):
         """Pivot as a pandas DataFrame (row label = row value, columns = col values)."""
-        import pandas as pd  # noqa: PLC0415 — optional, chart/export boundary only
+        import pandas as pd
 
         rows_data: dict[str, dict[str, float]] = {}
         for rv in self.row_values():
@@ -323,7 +323,7 @@ class Matrix:
             [self._fmt(self.values.get((rv, cv), float("nan"))) for cv in cols]
             for rv in rows
         ]
-        value_width = max((len(c) for row in cells for c in row)) if cells else 8
+        value_width = max(len(c) for row in cells for c in row) if cells else 8
         value_width = max(value_width, len(self.metric) + 2)
 
         row_name = self.rows

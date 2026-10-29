@@ -64,7 +64,7 @@ class FolderLevel:
         return {"pattern": self.pattern, "required": self.required}
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "FolderLevel":
+    def from_dict(cls, data: dict[str, Any]) -> FolderLevel:
         return cls(pattern=data["pattern"], required=bool(data.get("required", True)))
 
 
@@ -104,7 +104,7 @@ class FilePattern:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "FilePattern":
+    def from_dict(cls, data: dict[str, Any]) -> FilePattern:
         return cls(
             pattern=data["pattern"],
             extensions=list(data.get("extensions", ["txt"])),
@@ -161,7 +161,7 @@ class LineSchema:
         return out
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "LineSchema":
+    def from_dict(cls, data: dict[str, Any]) -> LineSchema:
         return cls(
             key_sep=data.get("key_sep", None),
             value_sep=data.get("value_sep", ";"),
@@ -203,7 +203,7 @@ class ScanSchema:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ScanSchema":
+    def from_dict(cls, data: dict[str, Any]) -> ScanSchema:
         return cls(
             name=str(data.get("name", "default")),
             folder_levels=[
@@ -233,7 +233,7 @@ def read_schemas(source: str | Path | dict[str, Any]) -> dict[str, ScanSchema]:
         data = json.loads(text)
 
     if not isinstance(data, dict):
-        raise ValueError(
+        raise TypeError(
             "schema JSON must be an object: a single ScanSchema or {name: ScanSchema}"
         )
 

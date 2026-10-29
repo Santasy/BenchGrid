@@ -410,8 +410,7 @@ def _json_stream_to_ndjson(
 
 def _strip_anchors(pattern: str) -> str:
     """Drop a leading ``^`` / trailing ``$`` so a level pattern embeds in a bigger regex."""
-    if pattern.startswith("^"):
-        pattern = pattern[1:]
+    pattern = pattern.removeprefix("^")
     if pattern.endswith("$") and not pattern.endswith("\\$"):
         pattern = pattern[:-1]
     return pattern
@@ -426,8 +425,7 @@ def _csv_path_regex(root_dirs: list[str], schema: ScanSchema) -> str:
     prefix = (
         re.escape(str(root_dirs[0]).rstrip("/"))
         if len(root_dirs) == 1
-        else "(?:%s)"
-        % "|".join(re.escape(str(root).rstrip("/")) for root in root_dirs)
+        else "(?:{})".format("|".join(re.escape(str(root).rstrip("/")) for root in root_dirs))
     )
     return f"^{prefix}/{body}$"
 

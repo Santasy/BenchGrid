@@ -26,6 +26,8 @@ class CommandPool:
     iteration: IterationPolicy = IterationPolicy.ALL_AT_ONCE
     freeze_key: str | None = None
     cpu_reserve: int = 1
+    mem_limit: int | None = None
+    memory_budget: int | None = None
 
     def __post_init__(self) -> None:
         self.commands = [
@@ -57,6 +59,8 @@ class CommandPool:
             parallel=self.parallel,
             iteration=self.iteration,
             freeze_key=self.freeze_key,
+            mem_limit=self.mem_limit,
+            memory_budget=self.memory_budget,
         )
 
 
@@ -69,6 +73,8 @@ def merge_plans(
     iteration: IterationPolicy = IterationPolicy.ALL_AT_ONCE,
     freeze_key: str | None = None,
     cpu_reserve: int = 1,
+    mem_limit: int | None = None,
+    memory_budget: int | None = None,
 ) -> CommandPool:
     """Render several plans and schedule the union in one pool."""
     commands: list[WorkCommand] = []
@@ -82,6 +88,8 @@ def merge_plans(
         iteration=iteration,
         freeze_key=freeze_key,
         cpu_reserve=cpu_reserve,
+        mem_limit=mem_limit,
+        memory_budget=memory_budget,
     )
 
 

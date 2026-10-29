@@ -16,6 +16,7 @@ building or running specifically — the worker callable is injected.
 
 import ctypes
 import multiprocessing
+import time
 from collections.abc import Callable, Sequence
 from threading import Event
 from typing import Generic, TypeVar
@@ -53,18 +54,81 @@ def set_process_title(title: str) -> None:
 
 
 def _init_worker(
-    name: str, init: Callable[..., object] | None, args: Sequence[object]
+    name: str, gate: "_MemoryGate | None", init: Callable[..., object] | None,
+    args: Sequence[object],
 ) -> None:
     """
-    Pool initializer: name the worker, then run the caller's own initializer.
+    Pool initializer: name the worker, adopt the memory gate, run caller init.
 
     The pool's own ``PoolWorker-<n>`` name supplies the index, so the workers of
-    one sweep are told apart from each other and from their parent.
+    one sweep are told apart from each other and from their parent.  The gate
+    arrives here because shared counters cross the fork by *inheritance* (the
+    task queue pickles per-task args and cannot carry one).  Best effort: a
+    platform without ``prctl`` simply keeps the inherited name.
     """
+    global _GATE
+    _GATE = gate
     index = multiprocessing.current_process().name.rpartition("-")[2]
     set_process_title(f"{name}:{index}"[:_NAME_MAX])
     if init is not None:
         init(*args)
+
+
+class _MemoryGate:
+    """
+    Cross-worker counter bounding the *sum* of declared command estimates.
+
+    ``acquire`` blocks until the estimate fits under ``budget``; releasing
+    happens in a ``finally``, so a crashing command cannot leak budget.  A
+    command that declares no estimate (0) consumes none and runs immediately.
+    Head-of-line blocking is accepted: queue order is preserved, so a big
+    command waits for budget even when smaller ones behind it would fit now.
+    """
+
+    def __init__(self, budget: int) -> None:
+        ctx = mp_context()
+        self.budget = budget
+        self._used = ctx.Value("q", 0)
+        self._lock = ctx.Lock()
+
+    def acquire(self, estimate: int) -> None:
+        if estimate <= 0:
+            return
+        while True:
+            with self._lock:
+                if self._used.value + estimate <= self.budget:
+                    self._used.value += estimate
+                    return
+            time.sleep(0.05)
+
+    def release(self, estimate: int) -> None:
+        if estimate <= 0:
+            return
+        with self._lock:
+            self._used.value -= estimate
+
+
+#: Worker-process global adopted by :func:`_init_worker`; ``None`` = unguarded.
+_GATE: "_MemoryGate | None" = None
+
+
+def _default_estimate(item: object) -> int:
+    """Estimate from the attribute BenchGrid plans stamp on commands."""
+    return int(getattr(item, "mem_estimate", 0) or 0)
+
+
+def _run_gated(
+    worker: Callable[[object], object], item: object, estimate: int
+) -> object:
+    """Worker trampoline: reserve the budget around one task."""
+    gate = _GATE
+    if gate is None or estimate <= 0:
+        return worker(item)
+    gate.acquire(estimate)
+    try:
+        return worker(item)
+    finally:
+        gate.release(estimate)
 
 
 def mp_context() -> multiprocessing.context.BaseContext:
@@ -104,6 +168,8 @@ class PoolRunner(Generic[ItemT, ResultT]):
         worker_init: Callable[..., object] | None = None,
         worker_init_args: Sequence[object] = (),
         name: str = "benchgrid",
+        memory_budget: int | None = None,
+        estimate: Callable[[ItemT], int] | None = None,
     ) -> None:
         self._worker = worker
         self._name = name
@@ -112,6 +178,8 @@ class PoolRunner(Generic[ItemT, ResultT]):
         )
         self._worker_init = worker_init
         self._worker_init_args = tuple(worker_init_args)
+        self._budget = memory_budget
+        self._estimate = estimate if estimate is not None else _default_estimate
         self._threads = 0
         self._total = 0
         self._finished = 0
@@ -162,6 +230,18 @@ class PoolRunner(Generic[ItemT, ResultT]):
         self._threads = max(1, min(self._requested, n))
         self._total = n
         self._finished = 0
+
+        gate: _MemoryGate | None = None
+        estimates: list[int] = []
+        if self._budget is not None:
+            gate = _MemoryGate(self._budget)
+            estimates = [self._estimate(item) for item in items]
+            too_big = max((e for e in estimates if e > self._budget), default=0)
+            if too_big:
+                raise ValueError(
+                    f"command mem_estimate {too_big} B exceeds memory_budget "
+                    f"{self._budget} B — it could never start"
+                )
         print(
             f"\n===== Running {n} command(s) with {self._threads} workers =====",
             flush=True,
@@ -170,7 +250,7 @@ class PoolRunner(Generic[ItemT, ResultT]):
         pool = mp_context().Pool(
             processes=self._threads,
             initializer=_init_worker,
-            initargs=(self._name, self._worker_init, self._worker_init_args),
+            initargs=(self._name, gate, self._worker_init, self._worker_init_args),
         )
 
         collected: dict[int, ResultT] = {}
@@ -193,9 +273,13 @@ class PoolRunner(Generic[ItemT, ResultT]):
 
         try:
             for index, item in enumerate(items):
+                if gate is None:
+                    task, args = self._worker, (item,)
+                else:
+                    task, args = _run_gated, (self._worker, item, estimates[index])
                 pool.apply_async(
-                    self._worker,
-                    (item,),
+                    task,
+                    args,
                     callback=lambda res, i=index: _finish(i, res),
                     error_callback=lambda exc, i=index: _fail(i, exc),
                 )
@@ -210,7 +294,7 @@ class PoolRunner(Generic[ItemT, ResultT]):
             try:
                 exc.pool_index = index  # type: ignore[attr-defined]
                 exc.pool_item = items[index]  # type: ignore[attr-defined]
-            except Exception:  # pragma: no cover - exotic exception types
+            except Exception:  # noqa: BLE001, S110 — best effort on exotic exceptions
                 pass
             raise exc
         return [collected[i] for i in range(n)]
