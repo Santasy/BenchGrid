@@ -49,6 +49,13 @@ class PairPlotSpec:
     text_key: str | None = None
     log_x: bool = False
     log_y: bool = False
+    #: Draw vertical reference lines at x positions of a baseline series instead
+    #: of scattered points.
+    baseline_key: str | None = None
+    baseline_value: Any | None = None
+    baseline_color: str = "gray"
+    baseline_alpha: float = 0.4
+    baseline_linestyle: str = "--"
 
 
 def pair_frame(

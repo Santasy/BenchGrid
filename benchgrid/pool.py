@@ -41,14 +41,19 @@ class CommandPool:
         )
 
     def run(
-        self, *, dry_run: bool = False, verbose: bool = False
+        self,
+        *,
+        dry_run: bool = False,
+        verbose: bool = False,
+        threads: int | None = None,
     ) -> int:
+        resolved = self.resolved_threads() if threads is None else threads
         return execute_commands(
             self.commands,
             label=self.name,
             dry_run=dry_run,
             verbose=verbose,
-            threads=self.resolved_threads(),
+            threads=resolved,
             parallel=self.parallel,
             iteration=self.iteration,
             freeze_key=self.freeze_key,

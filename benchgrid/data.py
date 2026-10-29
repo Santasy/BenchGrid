@@ -50,14 +50,23 @@ def _to_frame(data: Any) -> pl.DataFrame:
 
 def _filter_frame(df: pl.DataFrame, fixed: dict[str, Any]) -> pl.DataFrame:
     """
-    Exact-match filter with string coercion on both sides (legacy semantics:
-    ``fixed={"version": "simple"}`` matches an int column value ``0`` only by
-    string equality — columns are compared after casting both sides to str).
-    Unknown keys are ignored, like ``aggregate.filter_records``.
+    Filter frame with polars expressions where possible.
+
+    - ``pl.Expr`` values are applied as-is.
+    - list/tuple/set values use ``pl.col(key).is_in(...)``.
+    - scalars use exact match with string coercion (legacy semantics).
+    Unknown keys are ignored.
     """
     for key, value in fixed.items():
-        if key in df.columns:
-            df = df.filter(pl.col(key).cast(pl.Utf8) == str(value))
+        if isinstance(value, pl.Expr):
+            df = df.filter(value)
+            continue
+        if key not in df.columns:
+            continue
+        if isinstance(value, (list, tuple, set)):
+            df = df.filter(pl.col(key).is_in(list(value)))
+            continue
+        df = df.filter(pl.col(key).cast(pl.Utf8) == str(value))
     return df
 
 

@@ -696,10 +696,50 @@ def render_pairs(
 
     label_col = PLOT_LABEL if PLOT_LABEL in frame.columns else LABEL_KEY
     labels = frame[label_col].unique()
+
+    baseline_frame = None
+    other_labels = []
+    if (
+        spec.baseline_key
+        and spec.baseline_value is not None
+        and spec.baseline_key in frame.columns
+    ):
+        baseline_frame = frame.filter(
+            pl.col(spec.baseline_key) == spec.baseline_value
+        )
+        other_labels = [
+            l
+            for l in labels
+            if l != spec.baseline_value
+            and l not in baseline_frame[label_col].to_list()
+            if False
+        ]
+        # easier: filter by key value
+        base_mask = baseline_frame.shape[0] > 0
+    else:
+        baseline_frame = None
+
+    if baseline_frame is not None and baseline_frame.shape[0] > 0:
+        for xv in baseline_frame[x_metric].to_list():
+            if xv is None:
+                continue
+            ax.axvline(
+                xv,
+                color=spec.baseline_color,
+                alpha=spec.baseline_alpha,
+                linestyle=spec.baseline_linestyle,
+                zorder=0,
+            )
+        labels_to_plot = [
+            l for l in labels if l not in baseline_frame[label_col].to_list()
+        ]
+    else:
+        labels_to_plot = labels
+
     results.texts = []
     results.markers = []
     results.colors = []
-    for label in labels:
+    for label in labels_to_plot:
         subdf = frame.filter(pl.col(label_col) == label)
         points_x = subdf[x_metric]
         points_y = subdf[y_metric]
@@ -721,10 +761,12 @@ def render_pairs(
         # Store texts, color and marker for latter adjustment:
         if spec.text_key is not None:
             results.texts.extend(subdf[spec.text_key])
-        if "color" in style:
-            results.colors.extend([style["color"]] * count)
-        if "marker" in style:
-            results.markers.extend([style["marker"]] * count)
+
+        _color = style.get("color", "r")
+        results.colors.extend([_color] * count)
+
+        _marker = style.get("marker", "")
+        results.markers.extend([_marker] * count)
 
     # Transform before reallocating points text.
     if use_logx:
@@ -743,11 +785,11 @@ def render_pairs(
             textsize=8,
             avoid_crossing_label_lines=op_avoid_crossing,
             avoid_label_lines_overlap=op_avoid_overlap,
-            min_distance=0.006,
-            max_distance=0.08,
+            min_distance=0.008,
+            max_distance=0.1,
             # direction="southeast"
             linecolor=results.colors or "r",
-            textcolor=results.colors or "black",
+            textcolor=results.colors or "k",
         )
 
     labels = (x_label or x_metric, y_label or y_metric)
