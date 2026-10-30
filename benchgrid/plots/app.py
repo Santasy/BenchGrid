@@ -39,7 +39,7 @@ import matplotlib.pyplot as plt
 import polars as pl
 import streamlit as st
 
-from ..data import Matrix, _agg_expr
+from ..data import Matrix, _agg_expr, _filter_frame
 from . import charts, preprocess
 from .adapter import PlotsAdapter, Tab, default_load
 from .coloring import COLOR_FIELD, Coloring, color_frame, slice_keys
@@ -113,6 +113,37 @@ def select_step(
         label or adapter.step_label, values, index=index, key=f"step_{key}"
     )
     return ctx.step
+
+
+def select_series(ctx: TabContext, *, key: str) -> None:
+    """
+    In-body series multiselects over ``adapter.series_keys`` (one per column).
+
+    The sidebar dims are single-choice; this is the tab-local, multi-value
+    counterpart every engine view opens with: each declared column offers the
+    values its current sidebar slice contains (default: all), and the
+    selection is written back into ``ctx.filters``, where the ``is_in``
+    support of :func:`~benchgrid.data._filter_frame` narrows every
+    ``ctx.frame`` read of this tab.  Like :func:`select_step` it is a no-op
+    when the adapter declares nothing, so existing viewers are untouched.
+
+    ``key`` namespaces the widgets (one selector per tab body, like the step
+    selector); the per-tab ``filters`` copy made by :func:`run` keeps one
+    tab's selection from leaking into the next.
+    """
+    keys = list(ctx.adapter.series_keys)
+    if not keys:
+        return
+    dest = ctx.adapter.distinct_source or next(iter(ctx.dataset.sources))
+    base = _filter_frame(ctx.dataset.frame(dest), ctx.filters)
+    with st.container(horizontal=True):
+        for col in keys:
+            if col not in base.columns:
+                continue
+            values = base[col].unique().drop_nulls().sort().to_list()
+            ctx.filters[col] = st.multiselect(
+                col, values, default=values, key=f"series_{key}_{col}"
+            )
 
 
 def load_dataset(adapter: PlotsAdapter) -> Any:
@@ -375,6 +406,7 @@ def render_panels(
     adapter = ctx.adapter
     if step:
         select_step(ctx, key=step_key)
+    select_series(ctx, key=step_key)
     panels = _init_panel_state(adapter)
     metrics = available_metrics(ctx)
     if not metrics:
@@ -472,6 +504,7 @@ def render_curve(
     adapter = ctx.adapter
     stem = f"curve_{key or _spec_key(spec)}"
     select_step(ctx, key=stem)
+    select_series(ctx, key=stem)
     options = available_metrics(ctx)
     if spec.metric not in options:
         options.insert(0, spec.metric)
@@ -632,6 +665,7 @@ def render_pairs(
     dpi: int | None = DEFAULT_DPI,
     fig_size: tuple[int] | None = None,
     filters: FilterHook | None = None,
+    baseline_selector: str | None = None,
 ) -> None:
     """
     Plot *spec*'s paired metrics and offer the plotted frame as CSV.
@@ -646,6 +680,13 @@ def render_pairs(
     *filters* is the workload's filter hook: it renders the tab's own filter
     widgets (right below the step selector) and returns the row filters to
     apply to the plotted frame.
+
+    The tab-local series multiselects of :func:`select_series` narrow this
+    view like every other (via ``adapter.series_keys``).  *baseline_selector*
+    names a frame column and adds the per-tab baseline selectbox: the chosen
+    value is drawn as vertical reference lines (the ``spec.baseline_*``
+    behavior) instead of points, defaulting to *spec.baseline_value*
+    ("(none)" = no baseline).
     """
     import textalloc
 
@@ -654,6 +695,7 @@ def render_pairs(
     # == Setup ==
     stem = f"pairs_{key or _pair_key(spec)}"
     select_step(ctx, key=stem)
+    select_series(ctx, key=stem)
     extra = filters(ctx) if filters is not None else {}
 
     options = available_metrics(ctx)
@@ -719,6 +761,29 @@ def render_pairs(
         st.error(f"Column '{LABEL_KEY}' not in plotting frame.")
         return
 
+    # == Baseline selector (mechanics, when the caller opts in) ==
+    # The series multiselects already narrowed this tab through ctx.filters
+    # (select_series at body top), so the baseline offers what is plottable.
+    if baseline_selector and baseline_selector in frame.columns:
+        baseline_options = ["(none)"] + (
+            frame[baseline_selector].unique().drop_nulls().sort().to_list()
+        )
+        index = (
+            baseline_options.index(spec.baseline_value)
+            if spec.baseline_value in baseline_options
+            else 0
+        )
+        choice = st.selectbox(
+            "Baseline struct (vertical lines)",
+            baseline_options,
+            index=index,
+            key=f"{stem}_baseline",
+        )
+        if choice == "(none)":
+            spec = replace(spec, baseline_value=None)
+        else:
+            spec = replace(spec, baseline_key=baseline_selector, baseline_value=choice)
+
     fig, ax = plt.subplots(figsize=(op_width, op_height))
 
     label_col = PLOT_LABEL if PLOT_LABEL in frame.columns else LABEL_KEY
@@ -777,7 +842,9 @@ def render_pairs(
 
         # Store texts, color and marker for latter adjustment:
         if spec.text_key is not None:
-            results.texts.extend(subdf[spec.text_key])
+            # NULL keys (canonical structs without a parameter) label nothing;
+            # textalloc wants a string, not None.
+            results.texts.extend(subdf[spec.text_key].fill_null(""))
 
         _color = style.get("color", "r")
         results.colors.extend([_color] * count)
@@ -873,4 +940,7 @@ def run(adapter: PlotsAdapter, tabs: Sequence[Tab]) -> None:
     )
     for tab, spec in zip(st.tabs([tab.label for tab in tabs]), tabs):
         with tab:
-            spec.render(ctx)
+            # Each tab renders with a private copy of the sidebar filters:
+            # the in-body series selectors (``select_series``) write list
+            # filters into ``ctx.filters`` and must not leak to the next tab.
+            spec.render(replace(ctx, filters=dict(ctx.filters)))

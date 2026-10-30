@@ -115,6 +115,11 @@ class PlotsAdapter:
     #: Label of the step selector every view opens with.
     step_label: str = "Step"
     dims: list[str] = field(default_factory=list)
+    #: Columns the in-body series multiselects of every engine view offer
+    #: (multi-value counterpart of the single-choice sidebar *dims*; typically
+    #: the struct plus its variant so a view can mix e.g. WTree-slide with
+    #: RB-tree).  Empty = no selector widgets.
+    series_keys: list[str] = field(default_factory=list)
     color_group_extras: list[str] = field(default_factory=list)
     best_direction: dict[str, str] = field(default_factory=dict)
     agg_methods: list[str] = field(

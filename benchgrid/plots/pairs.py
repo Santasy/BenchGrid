@@ -106,7 +106,11 @@ def pair_frame(
 
     left = side(spec.x_metric)
     right = side(spec.y_metric)
-    pairs = left.join(right, on=keys, how="inner")
+    # null_equal: a configuration may have a NULL key column on both sides
+    # (e.g. a canonical struct without a node-size parameter) — those are the
+    # same configuration; a null-unequal join would silently drop the series
+    # from every pair view.
+    pairs = left.join(right, on=keys, how="inner", nulls_equal=True)
     # Both sides carry the same presentation columns; keep one copy of each.
     duplicated = [c for c in plot_columns(left) if c in right.columns]
     if duplicated:
