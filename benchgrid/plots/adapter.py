@@ -120,6 +120,13 @@ class PlotsAdapter:
     #: the struct plus its variant so a view can mix e.g. WTree-slide with
     #: RB-tree).  Empty = no selector widgets.
     series_keys: list[str] = field(default_factory=list)
+    #: Preselection of a series column (values not listed start unselected).
+    #: Declared values missing from the loaded data are ignored; if none of
+    #: them is present the column opens with every value selected.
+    series_defaults: dict[str, list[Any]] = field(default_factory=dict)
+    #: Preferred legend order (the plotted series names, e.g. ``plot_label``).
+    #: Unlisted series follow in frame order; empty = frame order everywhere.
+    label_order: list[str] = field(default_factory=list)
     color_group_extras: list[str] = field(default_factory=list)
     best_direction: dict[str, str] = field(default_factory=dict)
     agg_methods: list[str] = field(

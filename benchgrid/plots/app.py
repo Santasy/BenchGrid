@@ -115,17 +115,32 @@ def select_step(
     return ctx.step
 
 
+def _series_default(values: list[Any], wanted: list[Any] | None) -> list[Any]:
+    """
+    Preselection of one series multiselect.
+
+    *wanted* is the workload's declaration (``None`` = no declaration): the
+    selected values are the declared ones that exist in *values*, so a
+    declaration never filters a tree that lacks them.  When none of the
+    declared values is loaded, everything stays selected (the filter bypasses).
+    """
+    if wanted is None:
+        return values
+    return [v for v in values if v in wanted] or values
+
+
 def select_series(ctx: TabContext, *, key: str) -> None:
     """
     In-body series multiselects over ``adapter.series_keys`` (one per column).
 
     The sidebar dims are single-choice; this is the tab-local, multi-value
     counterpart every engine view opens with: each declared column offers the
-    values its current sidebar slice contains (default: all), and the
-    selection is written back into ``ctx.filters``, where the ``is_in``
-    support of :func:`~benchgrid.data._filter_frame` narrows every
-    ``ctx.frame`` read of this tab.  Like :func:`select_step` it is a no-op
-    when the adapter declares nothing, so existing viewers are untouched.
+    values its current sidebar slice contains (default: all, or the
+    ``adapter.series_defaults`` preselection), and the selection is written
+    back into ``ctx.filters``, where the ``is_in`` support of
+    :func:`~benchgrid.data._filter_frame` narrows every ``ctx.frame`` read of
+    this tab.  Like :func:`select_step` it is a no-op when the adapter declares
+    nothing, so existing viewers are untouched.
 
     ``key`` namespaces the widgets (one selector per tab body, like the step
     selector); the per-tab ``filters`` copy made by :func:`run` keeps one
@@ -142,7 +157,10 @@ def select_series(ctx: TabContext, *, key: str) -> None:
                 continue
             values = base[col].unique().drop_nulls().sort().to_list()
             ctx.filters[col] = st.multiselect(
-                col, values, default=values, key=f"series_{key}_{col}"
+                col,
+                values,
+                default=_series_default(values, ctx.adapter.series_defaults.get(col)),
+                key=f"series_{key}_{col}",
             )
 
 
@@ -788,6 +806,11 @@ def render_pairs(
 
     label_col = PLOT_LABEL if PLOT_LABEL in frame.columns else LABEL_KEY
     labels = frame[label_col].unique()
+    order = ctx.adapter.label_order
+    if order:
+        rank = {name: i for i, name in enumerate(order)}
+        # Unlisted series keep their frame order behind the declared ones.
+        labels = sorted(labels, key=lambda name: rank.get(name, len(order)))
 
     baseline_frame = None
     if (
