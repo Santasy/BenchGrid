@@ -301,6 +301,15 @@ def scan_json(root_dirs: list[str], schema: ScanSchema) -> pl.DataFrame:
 
     marker_token = '{"' + marker + '"'
 
+    #: The injected metadata columns are declared Utf8: a tree whose leading
+    #: files leave an optional group NULL (e.g. canonical structs without a
+    #: parameter token) would otherwise infer that column as NULL-typed and
+    #: choke on the first real value past the inference window.
+    overrides: dict[str, Any] = {}
+    for lvl in schema.folder_levels:
+        overrides.update({group: pl.Utf8 for group in lvl.compile().groupindex})
+    overrides.update({group: pl.Utf8 for group in fp.compile().groupindex})
+
     parts: list[str] = []
     for path, keys in _iter_matching_files(root_dirs, schema):
         parts.append(
@@ -310,7 +319,15 @@ def scan_json(root_dirs: list[str], schema: ScanSchema) -> pl.DataFrame:
     buffer = "\n".join(p for p in parts if p)
     if not buffer:
         return pl.DataFrame()
-    return pl.read_ndjson(io.StringIO(buffer))
+    # infer_schema_length=None: the metadata groups plus heterogeneous
+    # registers (an int-looking value in one struct's JSON, a float in
+    # another) routinely exceed the default 100-row inference window when a
+    # tree starts with many uniform files, so infer over the whole document.
+    return pl.read_ndjson(
+        io.StringIO(buffer),
+        schema_overrides=overrides,
+        infer_schema_length=None,
+    )
 
 
 def scan_csv_with_key_separator(
