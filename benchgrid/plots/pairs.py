@@ -56,6 +56,11 @@ class PairPlotSpec:
     baseline_color: str = "gray"
     baseline_alpha: float = 0.4
     baseline_linestyle: str = "--"
+    #: Columns whose value is appended to each series' legend name (``label
+    #: (value)``) when the reader turns the tab's toggle on.  Needed when two
+    #: workloads share a version folder (e.g. two W-tree generations both run
+    #: ``slide-bs`` and would otherwise collapse onto one legend entry).
+    legend_keys: tuple[str, ...] = ()
 
 
 def pair_frame(

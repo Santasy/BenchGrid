@@ -605,6 +605,32 @@ def _series_style(frame: pl.DataFrame, series: pl.DataFrame) -> dict[str, Any]:
     return style
 
 
+def append_legend_keys(
+    frame: pl.DataFrame,
+    label_col: str,
+    keys: "Sequence[str]",
+) -> pl.DataFrame:
+    """
+    Rewrite the legend names as ``<label> (<key values>)``.
+
+    Applied row-wise (missing columns are ignored), so a label shared by two
+    workloads — e.g. two W-tree generations both running ``slide-bs`` — becomes
+    two distinct series instead of one merged legend entry.
+    """
+    present = [k for k in keys if k in frame.columns]
+    if not present or label_col not in frame.columns:
+        return frame
+    # Row-wise: the whole point is to *split* a label that two workloads share
+    # (wtree and owtree both name a series "vSlide-BS"), so a per-label
+    # mapping would collapse them again.
+    suffix = pl.concat_str(
+        [pl.col(k).cast(pl.Utf8) for k in present], separator=" "
+    )
+    return frame.with_columns(
+        (pl.col(label_col) + " (" + suffix + ")").alias(label_col)
+    )
+
+
 def render_pairs_altair(
     ctx: TabContext,
     spec: PairPlotSpec,
@@ -768,6 +794,14 @@ def render_pairs(
         )
         op_avoid_overlap = st.checkbox("Avoid label lines overlap", value=True)
 
+    append_legend = False
+    if spec.legend_keys:
+        append_legend = st.checkbox(
+            "Append " + " + ".join(spec.legend_keys) + " to legend names",
+            value=False,
+            key=f"{stem}_legend_keys",
+        )
+
     # == Render ==
     frame = pair_frame(ctx, spec, agg=ctx.agg, filters=extra)
     # Drop rows with no data in either selected metric.
@@ -805,12 +839,25 @@ def render_pairs(
     fig, ax = plt.subplots(figsize=(op_width, op_height))
 
     label_col = PLOT_LABEL if PLOT_LABEL in frame.columns else LABEL_KEY
+    if append_legend:
+        frame = append_legend_keys(frame, label_col, spec.legend_keys)
     labels = frame[label_col].unique()
     order = ctx.adapter.label_order
     if order:
         rank = {name: i for i, name in enumerate(order)}
+
+        def _rank(name: str) -> int:
+            # A legend name may carry the appended key suffix (see
+            # append_legend_keys); rank it by its declared base label.
+            if name in rank:
+                return rank[name]
+            for base, index in rank.items():
+                if name.startswith(base + " ("):
+                    return index
+            return len(order)
+
         # Unlisted series keep their frame order behind the declared ones.
-        labels = sorted(labels, key=lambda name: rank.get(name, len(order)))
+        labels = sorted(labels, key=_rank)
 
     baseline_frame = None
     if (
