@@ -8,6 +8,8 @@ trade-off derive. Runs headless, no streamlit, no framework.
 import tempfile
 from pathlib import Path
 
+import polars as pl
+
 from benchgrid.data import Dataset
 from benchgrid.plots.adapter import PlotsAdapter
 from benchgrid.plots.context import TabContext
@@ -94,5 +96,31 @@ with tempfile.TemporaryDirectory() as tmp:
     )
     frame = pair_frame(ctx, spec)
     assert frame.height == 2, frame.height
+
+    # keep_key: the repeats stay as rows (one per config per seed) instead of
+    # collapsing to one point; everything else (the per-seed reduction) is
+    # unchanged.
+    seeded = pl.concat(
+        [
+            csv.with_columns(pl.lit(0).alias("seed")),
+            csv.with_columns(pl.lit(1).alias("seed")),
+        ]
+    )
+    ds_seeded = Dataset(
+        frames={"csv": seeded},
+        schemas={"csv": csv_schema},
+        metric_keys={"csv": frozenset(["duration_ms", "bytes"])},
+    )
+    kept = pair_frame(
+        TabContext(adapter=adapter, dataset=ds_seeded),
+        PairPlotSpec(
+            x_metric="duration_ms",
+            y_metric="bytes",
+            point_keys=["variant"],
+            color_keys=["variant"],
+            keep_key="seed",
+        ),
+    )
+    assert kept.height == 4, kept.height  # 2 variants × 2 seeds
 
 print("ok")

@@ -9,7 +9,9 @@ sidebar filters, the tab's step selector and the aggregation.
 
 Both axes are reduced independently over the repeated measures (seeds) and then
 inner-joined on the configuration keys: a configuration measured on only one
-side has no pair and is dropped.
+side has no pair and is dropped.  :attr:`PairPlotSpec.keep_key` keeps the
+repeats instead of reducing them, which is what the tab's percentile regions
+draw over.
 """
 
 from __future__ import annotations
@@ -61,6 +63,10 @@ class PairPlotSpec:
     #: workloads share a version folder (e.g. two W-tree generations both run
     #: ``slide-bs`` and would otherwise collapse onto one legend entry).
     legend_keys: tuple[str, ...] = ()
+    #: Keep one row per value of this key instead of reducing it away (e.g.
+    #: ``"seed"``), so the plot can show a configuration's repeated-measure
+    #: spread.  ``None`` reduces the repeats to one point (the classic view).
+    keep_key: str | None = None
 
 
 def pair_frame(
@@ -87,6 +93,9 @@ def pair_frame(
     """
     adapter = ctx.adapter
     keys = list(dict.fromkeys([*spec.color_keys, *spec.point_keys]))
+    # A kept key (the repeated measure) stays in the group-by *and* the join, so
+    # one row per configuration per repeat falls out instead of a single point.
+    kept = [spec.keep_key] if spec.keep_key else []
     unknown = [
         m for m in (spec.x_metric, spec.y_metric) if m not in adapter.metric_source
     ]
@@ -104,7 +113,7 @@ def pair_frame(
                 {k: v for k, v in row_filters.items() if k in frame.columns},
             )
         presentation = plot_columns(frame)
-        return frame.group_by(keys, maintain_order=True).agg(
+        return frame.group_by(keys + kept, maintain_order=True).agg(
             _agg_expr(agg, metric).alias(metric),
             *(pl.col(c).first().alias(c) for c in presentation),
         )
@@ -115,7 +124,7 @@ def pair_frame(
     # (e.g. a canonical struct without a node-size parameter) — those are the
     # same configuration; a null-unequal join would silently drop the series
     # from every pair view.
-    pairs = left.join(right, on=keys, how="inner", nulls_equal=True)
+    pairs = left.join(right, on=keys + kept, how="inner", nulls_equal=True)
     # Both sides carry the same presentation columns; keep one copy of each.
     duplicated = [c for c in plot_columns(left) if c in right.columns]
     if duplicated:
@@ -126,5 +135,5 @@ def pair_frame(
             ]
         ).drop([f"{c}_right" for c in duplicated])
     return pairs.with_columns(identity_label(spec.color_keys).alias(LABEL_KEY)).sort(
-        keys
+        keys + kept
     )

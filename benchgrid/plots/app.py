@@ -605,6 +605,62 @@ def _series_style(frame: pl.DataFrame, series: pl.DataFrame) -> dict[str, Any]:
     return style
 
 
+def _hull(
+    xs: "Sequence[float]", ys: "Sequence[float]"
+) -> tuple[list[float], list[float]] | None:
+    """Monotone-chain convex hull; ``None`` when the cloud is a line or a point."""
+    pts = sorted(set(zip(xs, ys)))
+    if len(pts) < 3:
+        return None
+
+    def chain(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
+        out: list[tuple[float, float]] = []
+        for p in points:
+            while len(out) > 1 and (
+                (out[-1][0] - out[-2][0]) * (p[1] - out[-2][1])
+                - (out[-1][1] - out[-2][1]) * (p[0] - out[-2][0])
+            ) <= 0:
+                out.pop()
+            out.append(p)
+        return out
+
+    hull = chain(pts)[:-1] + chain(pts[::-1])[:-1]
+    if len(hull) < 3:
+        return None
+    return [p[0] for p in hull], [p[1] for p in hull]
+
+
+def _seed_region(
+    group: pl.DataFrame, x_metric: str, y_metric: str, q: float = 0.1
+) -> tuple[list[float], list[float]] | None:
+    """
+    Percentile area of one configuration's repeats: the hull of the seeds left
+    inside the configuration's own ``q``..``1-q`` box on both axes, so an
+    outlier seed on either axis cannot stretch the fill.  ``None`` when too
+    few seeds survive to bound an area — the caller then draws a plain point,
+    which is also what a single-seed dataset gives.
+
+    *q* trims each axis separately, so the kept fraction is ``(1-2q)²`` for
+    unrelated metrics — not ``1-2q``; the tab states that coverage on the plot.
+    """
+    if group.height < 3:
+        return None
+    xs, ys = group[x_metric], group[y_metric]
+    # linear (not polars' "nearest" default): with a handful of seeds the
+    # nearest-rank quantile returns a real sample, so the extremes survive.
+    kept = group.filter(
+        pl.col(x_metric).is_between(
+            xs.quantile(q, interpolation="linear"),
+            xs.quantile(1 - q, interpolation="linear"),
+        )
+        & pl.col(y_metric).is_between(
+            ys.quantile(q, interpolation="linear"),
+            ys.quantile(1 - q, interpolation="linear"),
+        )
+    )
+    return _hull(kept[x_metric].to_list(), kept[y_metric].to_list())
+
+
 def append_legend_keys(
     frame: pl.DataFrame,
     label_col: str,
@@ -794,6 +850,30 @@ def render_pairs(
         )
         op_avoid_overlap = st.checkbox("Avoid label lines overlap", value=True)
 
+        # A declared repeat key turns each configuration's seeds into one filled
+        # percentile area instead of one point per seed (off = the flat view).
+        regions = spec.keep_key is not None and st.checkbox(
+            "Percentile areas (seed spread)",
+            value=True,
+            key=f"{stem}_regions",
+        )
+        # Trim per axis: q = the tail dropped on each side, so p q..p 1-q.
+        quantile = (
+            st.slider(
+                "Percentile trim q (per axis)",
+                min_value=0.0,
+                max_value=0.25,
+                value=0.1,
+                step=0.01,
+                format="%.2f",
+                key=f"{stem}_q",
+            )
+            if regions
+            else 0.0
+        )
+    if spec.keep_key and not regions:
+        spec = replace(spec, keep_key=None)
+
     append_legend = False
     if spec.legend_keys:
         append_legend = st.checkbox(
@@ -891,36 +971,61 @@ def render_pairs(
     results.texts = []
     results.markers = []
     results.colors = []
+    grouped = spec.keep_key is not None
     for label in labels_to_plot:
         subdf = frame.filter(pl.col(label_col) == label)
-        points_x = subdf[x_metric]
-        points_y = subdf[y_metric]
-        count = len(points_x)
-
         style = _series_style(frame, subdf)
-        ax.scatter(
-            points_x,
-            points_y,
-            label=label,
-            s=60,
-            alpha=0.7,
-            **style,
-        )
-
-        results.x_points.extend(points_x)
-        results.y_points.extend(points_y)
-
-        # Store texts, color and marker for latter adjustment:
-        if spec.text_key is not None:
-            # NULL keys (canonical structs without a parameter) label nothing;
-            # textalloc wants a string, not None.
-            results.texts.extend(subdf[spec.text_key].fill_null(""))
-
         _color = style.get("color", "r")
-        results.colors.extend([_color] * count)
-
         _marker = style.get("marker", "")
-        results.markers.extend([_marker] * count)
+        # One artist per configuration when the repeats are kept (each gets a
+        # percentile area), else the whole series at once, as before.
+        groups = (
+            subdf.partition_by(spec.point_keys, maintain_order=True)
+            if grouped
+            else [subdf]
+        )
+        for index, group in enumerate(groups):
+            # One legend entry per series, not one per configuration.
+            ax_label = label if index == 0 else None
+            region = grouped and _seed_region(
+                group, x_metric, y_metric, quantile
+            )
+            if region:
+                hull_x, hull_y = region
+                ax.fill(
+                    hull_x, hull_y, color=_color, alpha=0.25,
+                    edgecolor=_color, linewidth=0.8,
+                    label=ax_label, zorder=1,
+                )
+                # Anchor the point label and the marker on the configuration's
+                # middle: the seeds themselves hold no extra information here.
+                points_x = [group[x_metric].median()]
+                points_y = [group[y_metric].median()]
+                ax.scatter(points_x, points_y, s=18, zorder=2, **style)
+            else:
+                points_x = group[x_metric]
+                points_y = group[y_metric]
+                ax.scatter(
+                    points_x,
+                    points_y,
+                    label=ax_label,
+                    s=60,
+                    alpha=0.7,
+                    **style,
+                )
+
+            results.x_points.extend(points_x)
+            results.y_points.extend(points_y)
+
+            # Store texts, color and marker for latter adjustment:
+            if spec.text_key is not None:
+                # NULL keys (canonical structs without a parameter) label
+                # nothing; textalloc wants a string, not None.
+                texts = group[spec.text_key].fill_null("")
+                results.texts.extend(texts[:1] if region else texts)
+
+            results.colors.extend([_color] * len(points_x))
+            results.markers.extend([_marker] * len(points_x))
 
     # Transform before reallocating points text.
     if use_logx:
@@ -956,6 +1061,22 @@ def render_pairs(
     # plt.tight_layout()
 
     st.pyplot(fig, width="content")
+
+    if regions:
+        # The implication of q, stated where the reader looks at the result:
+        # each axis keeps 1-2q of the seeds, and because the two clips are
+        # independent the joint area is smaller (its bounds depend on whether
+        # the metrics move together or trade off).
+        axis_cover = 1 - 2 * quantile
+        st.caption(
+            f"Percentile areas: each axis keeps its central "
+            f"p{quantile:.0%}–p{axis_cover + quantile:.0%} "
+            f"({axis_cover:.0%} of the seeds). Both axes are clipped "
+            f"independently, so the hull holds ≈ {axis_cover**2:.0%} of a "
+            f"configuration's seeds when the metrics are unrelated, up to "
+            f"{axis_cover:.0%} when they rise and fall together, down to "
+            f"{max(0.0, 2 * axis_cover - 1):.0%} when they trade off."
+        )
 
     _step_name = ctx.step
     _extra_tags = "_".join([f"{dim}-{val}" for dim, val in extra.items()])
