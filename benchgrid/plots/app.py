@@ -661,6 +661,52 @@ def _seed_region(
     return _hull(kept[x_metric].to_list(), kept[y_metric].to_list())
 
 
+def _draw_baseline(
+    ax,
+    baseline_frame: pl.DataFrame,
+    *,
+    x_metric: str,
+    y_metric: str,
+    point_keys: "Sequence[str]",
+    quantile: float,
+    grouped: bool,
+    color: str,
+    alpha: float,
+    linestyle: str,
+) -> None:
+    """
+    Draw the baseline series as reference: one light gray percentile area per
+    configuration plus one dashed line at that configuration's mean *x*.
+
+    Never one line per repeated measure — with seeds kept that buried the plot
+    in dashes; the area above carries the spread instead.
+    """
+    groups = (
+        baseline_frame.partition_by(point_keys, maintain_order=True)
+        if point_keys
+        else [baseline_frame]
+    )
+    for group in groups:
+        region = (
+            _seed_region(group, x_metric, y_metric, quantile) if grouped else None
+        )
+        if region is not None:
+            ax.fill(
+                *region,
+                color=color,
+                alpha=0.15,
+                edgecolor="none",
+                zorder=0,
+            )
+        ax.axvline(
+            group[x_metric].mean(),
+            color=color,
+            alpha=alpha,
+            linestyle=linestyle,
+            zorder=0,
+        )
+
+
 def append_legend_keys(
     frame: pl.DataFrame,
     label_col: str,
@@ -784,9 +830,9 @@ def render_pairs(
     The tab-local series multiselects of :func:`select_series` narrow this
     view like every other (via ``adapter.series_keys``).  *baseline_selector*
     names a frame column and adds the per-tab baseline selectbox: the chosen
-    value is drawn as vertical reference lines (the ``spec.baseline_*``
-    behavior) instead of points, defaulting to *spec.baseline_value*
-    ("(none)" = no baseline).
+    value is drawn as a mean reference line over a light gray percentile area
+    (the ``spec.baseline_*`` behavior) instead of points, defaulting to
+    *spec.baseline_value* ("(none)" = no baseline).
     """
     import textalloc
 
@@ -951,17 +997,19 @@ def render_pairs(
     else:
         baseline_frame = None
 
-    if baseline_frame is not None and baseline_frame.shape[0] > 0:
-        for xv in baseline_frame[x_metric].to_list():
-            if xv is None:
-                continue
-            ax.axvline(
-                xv,
-                color=spec.baseline_color,
-                alpha=spec.baseline_alpha,
-                linestyle=spec.baseline_linestyle,
-                zorder=0,
-            )
+    if baseline_frame is not None and not baseline_frame.is_empty():
+        _draw_baseline(
+            ax,
+            baseline_frame,
+            x_metric=x_metric,
+            y_metric=y_metric,
+            point_keys=spec.point_keys,
+            quantile=quantile,
+            grouped=spec.keep_key is not None,
+            color=spec.baseline_color,
+            alpha=spec.baseline_alpha,
+            linestyle=spec.baseline_linestyle,
+        )
         labels_to_plot = [
             l for l in labels if l not in baseline_frame[label_col].to_list()
         ]

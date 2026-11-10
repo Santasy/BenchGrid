@@ -51,8 +51,8 @@ class PairPlotSpec:
     text_key: str | None = None
     log_x: bool = False
     log_y: bool = False
-    #: Draw vertical reference lines at x positions of a baseline series instead
-    #: of scattered points.
+    #: Draw a mean reference line over a light gray percentile area instead of
+    #: scattered points (see ``render_pairs``).
     baseline_key: str | None = None
     baseline_value: Any | None = None
     baseline_color: str = "gray"
