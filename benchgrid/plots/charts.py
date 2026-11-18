@@ -483,13 +483,15 @@ def lines_chart(
     log_x: bool = False,
     log_y: bool = False,
     height: int = 350,
+    width: int | None = None,
 ):
     """
     Generic line chart: x_key × y_key, one line per *color_key*.
 
     With *text_key* each point is labeled with its value (e.g. the target size
     achieving a growth-curve envelope).  *log_x*/*log_y* log the axes;
-    *height* is the figure height in pixels (curves want more than a heatmap).
+    *height*/*width* are the figure size in pixels (*width* ``None`` = the
+    chart's default; curves want more height than a heatmap).
     """
     import altair as alt
 
@@ -515,7 +517,9 @@ def lines_chart(
     x = _x_axis(x_key, log_x)
     y = _y_axis(y_key, log_y)
 
-    base = alt.Chart(df, title=title or y_key).properties(height=height)
+    base = alt.Chart(df, title=title or y_key).properties(
+        height=height, **({"width": width} if width else {})
+    )
     line = base.mark_line(
         point=alt.OverlayMarkDef(filled=True, size=70)
     ).encode(
@@ -530,7 +534,9 @@ def lines_chart(
             text=_text_alt(df, text_key),
             color=alt.Color(f"{color_key}:N"),
         )
-        return (line + labels).properties(height=height)
+        return (line + labels).properties(
+            height=height, **({"width": width} if width else {})
+        )
     return line
 
 

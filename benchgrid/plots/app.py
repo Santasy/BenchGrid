@@ -517,7 +517,8 @@ def render_curve(
     ``ctx.adapter.progress_key``; the aggregation over repeated measures is
     ``ctx.agg``, the step comes from the tab's step selector and the sidebar
     filters are already applied.  *key* only matters when the same spec is
-    rendered in more than one tab.
+    rendered in more than one tab.  Like :func:`render_pairs`, the plot size is
+    a pair of number inputs (pixels here; width 0 = fill the container).
     """
     adapter = ctx.adapter
     stem = f"curve_{key or _spec_key(spec)}"
@@ -526,12 +527,31 @@ def render_curve(
     options = available_metrics(ctx)
     if spec.metric not in options:
         options.insert(0, spec.metric)
-    metric = st.selectbox(
-        "Metric",
-        options,
-        index=options.index(spec.metric),
-        key=f"{stem}_metric",
-    )
+    with st.container(horizontal=True):
+        metric = st.selectbox(
+            "Metric",
+            options,
+            index=options.index(spec.metric),
+            key=f"{stem}_metric",
+        )
+        op_width = st.number_input(
+            "Plot width (px, 0 = full width):",
+            min_value=0,
+            max_value=4000,
+            value=0,
+            step=50,
+            width=180,
+            key=f"{stem}_width",
+        )
+        op_height = st.number_input(
+            "Plot height (px):",
+            min_value=100,
+            max_value=4000,
+            value=CURVE_HEIGHT,
+            step=50,
+            width=100,
+            key=f"{stem}_height",
+        )
     if metric == spec.metric:
         plotted_spec = spec
     else:
@@ -562,9 +582,10 @@ def render_curve(
             log_x=plotted_spec.log_x,
             log_y=plotted_spec.log_y,
             title="",
-            height=CURVE_HEIGHT,
+            height=op_height,
+            width=op_width or None,
         ),
-        width="stretch",
+        width=op_width or "stretch",
     )
     st.download_button(
         "Download curve data (CSV)",
@@ -865,8 +886,12 @@ def render_pairs(
             spec = replace(spec, y_metric=y_metric, x_metric=x_metric)
 
     with st.container(horizontal=True):
-        x_label = st.text_input("x-axis metric label", value="")
-        y_label = st.text_input("y-axis metric label", value="")
+        x_label = st.text_input(
+            "x-axis metric label", value="", key=f"{stem}_xlabel"
+        )
+        y_label = st.text_input(
+            "y-axis metric label", value="", key=f"{stem}_ylabel"
+        )
 
     _default_width, _default_height = fig_size if fig_size else (5, 5)
     cont = st.container(horizontal=True)
@@ -877,6 +902,7 @@ def render_pairs(
             max_value=20,
             value=_default_width,
             width=80,
+            key=f"{stem}_width",
         )
         op_height = st.number_input(
             "Plot height:",
@@ -884,17 +910,24 @@ def render_pairs(
             max_value=20,
             value=_default_height,
             width=80,
+            key=f"{stem}_height",
         )
 
-        use_logx = st.checkbox("Use log-scale on X-axis", value=spec.log_x)
-        use_logy = st.checkbox("Use log-scale on Y-axis", value=spec.log_y)
+        use_logx = st.checkbox(
+            "Use log-scale on X-axis", value=spec.log_x, key=f"{stem}_logx"
+        )
+        use_logy = st.checkbox(
+            "Use log-scale on Y-axis", value=spec.log_y, key=f"{stem}_logy"
+        )
 
         # avoid_crossing_label_lines=True,
         # avoid_label_lines_overlap=True,
         op_avoid_crossing = st.checkbox(
-            "Avoid crossing label lines", value=True
+            "Avoid crossing label lines", value=True, key=f"{stem}_avoid_crossing"
         )
-        op_avoid_overlap = st.checkbox("Avoid label lines overlap", value=True)
+        op_avoid_overlap = st.checkbox(
+            "Avoid label lines overlap", value=True, key=f"{stem}_avoid_overlap"
+        )
 
         # A declared repeat key turns each configuration's seeds into one filled
         # percentile area instead of one point per seed (off = the flat view).
@@ -1147,6 +1180,7 @@ def render_pairs(
             data=img,
             file_name=f"{fname}.pdf",
             mime="application/pdf",
+            key=f"{stem}_img",
         )
 
 
