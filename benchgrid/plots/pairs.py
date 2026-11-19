@@ -85,7 +85,10 @@ def pair_frame(
     the keys, both metrics and :data:`~benchgrid.plots.preprocess.LABEL_KEY`.
     A frame decorated with the ``plot_*`` presentation columns keeps them too
     (constant per series, so reduced with ``first()`` per side) — the
-    matplotlib sinks honour them (see :func:`~benchgrid.plots.preprocess.plot_columns`).
+    matplotlib sinks honour them (see :func:`~benchgrid.plots.preprocess.plot_columns`),
+    and so does :attr:`PairPlotSpec.text_key`: when it is not part of the
+    point identity it is carried as a per-configuration column, so a caller can
+    relabel the points after the fact.
 
     *filters* are extra row filters (the workload's own, e.g. one refinement
     level); they narrow both sides like :attr:`PairPlotSpec.filters` and win
@@ -96,6 +99,14 @@ def pair_frame(
     # A kept key (the repeated measure) stays in the group-by *and* the join, so
     # one row per configuration per repeat falls out instead of a single point.
     kept = [spec.keep_key] if spec.keep_key else []
+    # The point-label column travels with the pair when it is not already part
+    # of the identity (then it is a key and survives anyway), so a view can
+    # relabel its points with any per-configuration column.
+    text = (
+        spec.text_key
+        if spec.text_key is not None and spec.text_key not in keys + kept
+        else None
+    )
     unknown = [
         m for m in (spec.x_metric, spec.y_metric) if m not in adapter.metric_source
     ]
@@ -113,9 +124,10 @@ def pair_frame(
                 {k: v for k, v in row_filters.items() if k in frame.columns},
             )
         presentation = plot_columns(frame)
+        label = [text] if text and text in frame.columns else []
         return frame.group_by(keys + kept, maintain_order=True).agg(
             _agg_expr(agg, metric).alias(metric),
-            *(pl.col(c).first().alias(c) for c in presentation),
+            *(pl.col(c).first().alias(c) for c in (*presentation, *label)),
         )
 
     left = side(spec.x_metric)
@@ -125,8 +137,12 @@ def pair_frame(
     # same configuration; a null-unequal join would silently drop the series
     # from every pair view.
     pairs = left.join(right, on=keys + kept, how="inner", nulls_equal=True)
-    # Both sides carry the same presentation columns; keep one copy of each.
-    duplicated = [c for c in plot_columns(left) if c in right.columns]
+    # Both sides carry the same presentation/text columns; keep one copy each.
+    duplicated = [
+        c
+        for c in (*plot_columns(left), *([text] if text else []))
+        if c in right.columns
+    ]
     if duplicated:
         pairs = pairs.with_columns(
             [

@@ -159,7 +159,9 @@ def select_series(ctx: TabContext, *, key: str) -> None:
             ctx.filters[col] = st.multiselect(
                 col,
                 values,
-                default=_series_default(values, ctx.adapter.series_defaults.get(col)),
+                default=_series_default(
+                    values, ctx.adapter.series_defaults.get(col)
+                ),
                 key=f"series_{key}_{col}",
             )
 
@@ -205,7 +207,9 @@ def _sidebar(
     parts = []
     for source in ds.sources:
         frame = ds.frame(source)
-        parts.append(f"{source}: {frame.height} rows × {len(frame.columns)} cols")
+        parts.append(
+            f"{source}: {frame.height} rows × {len(frame.columns)} cols"
+        )
     st.caption(f"**Frames** — {'; '.join(parts)}")
     return fixed, agg, x_keys
 
@@ -637,10 +641,14 @@ def _hull(
     def chain(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
         out: list[tuple[float, float]] = []
         for p in points:
-            while len(out) > 1 and (
-                (out[-1][0] - out[-2][0]) * (p[1] - out[-2][1])
-                - (out[-1][1] - out[-2][1]) * (p[0] - out[-2][0])
-            ) <= 0:
+            while (
+                len(out) > 1
+                and (
+                    (out[-1][0] - out[-2][0]) * (p[1] - out[-2][1])
+                    - (out[-1][1] - out[-2][1]) * (p[0] - out[-2][0])
+                )
+                <= 0
+            ):
                 out.pop()
             out.append(p)
         return out
@@ -709,7 +717,9 @@ def _draw_baseline(
     )
     for group in groups:
         region = (
-            _seed_region(group, x_metric, y_metric, quantile) if grouped else None
+            _seed_region(group, x_metric, y_metric, quantile)
+            if grouped
+            else None
         )
         if region is not None:
             ax.fill(
@@ -833,6 +843,7 @@ def render_pairs(
     fig_size: tuple[int] | None = None,
     filters: FilterHook | None = None,
     baseline_selector: str | None = None,
+    text_keys: list[str] | None = None,
 ) -> None:
     """
     Plot *spec*'s paired metrics and offer the plotted frame as CSV.
@@ -853,7 +864,10 @@ def render_pairs(
     names a frame column and adds the per-tab baseline selectbox: the chosen
     value is drawn as a mean reference line over a light gray percentile area
     (the ``spec.baseline_*`` behavior) instead of points, defaulting to
-    *spec.baseline_value* ("(none)" = no baseline).
+    *spec.baseline_value* ("(none)" = no baseline).  *text_keys* declares
+    alternative point labels (a column each, e.g. a derived fan-out) and adds
+    the "Point text" selectbox, defaulting to *spec.text_key*; the chosen
+    column is carried by :func:`~.pairs.pair_frame`.
     """
     import textalloc
 
@@ -884,6 +898,25 @@ def render_pairs(
         )
         if y_metric != spec.y_metric or x_metric != spec.x_metric:
             spec = replace(spec, y_metric=y_metric, x_metric=x_metric)
+        if text_keys:
+            loaded = set().union(
+                *(ctx.dataset.keys(source) for source in ctx.dataset.sources)
+            )
+            choices = [key for key in text_keys if key in loaded]
+            default = (
+                spec.text_key
+                if spec.text_key in choices
+                else next(iter(choices), None)
+            )
+            if choices:
+                text = st.selectbox(
+                    "Point text",
+                    choices,
+                    index=choices.index(default),
+                    key=f"{stem}_text",
+                )
+                if text != spec.text_key:
+                    spec = replace(spec, text_key=text)
 
     with st.container(horizontal=True):
         x_label = st.text_input(
@@ -923,7 +956,9 @@ def render_pairs(
         # avoid_crossing_label_lines=True,
         # avoid_label_lines_overlap=True,
         op_avoid_crossing = st.checkbox(
-            "Avoid crossing label lines", value=True, key=f"{stem}_avoid_crossing"
+            "Avoid crossing label lines",
+            value=True,
+            key=f"{stem}_avoid_crossing",
         )
         op_avoid_overlap = st.checkbox(
             "Avoid label lines overlap", value=True, key=f"{stem}_avoid_overlap"
@@ -993,7 +1028,9 @@ def render_pairs(
         if choice == "(none)":
             spec = replace(spec, baseline_value=None)
         else:
-            spec = replace(spec, baseline_key=baseline_selector, baseline_value=choice)
+            spec = replace(
+                spec, baseline_key=baseline_selector, baseline_value=choice
+            )
 
     fig, ax = plt.subplots(figsize=(op_width, op_height))
 
@@ -1074,9 +1111,14 @@ def render_pairs(
             if region:
                 hull_x, hull_y = region
                 ax.fill(
-                    hull_x, hull_y, color=_color, alpha=0.25,
-                    edgecolor=_color, linewidth=0.8,
-                    label=ax_label, zorder=1,
+                    hull_x,
+                    hull_y,
+                    color=_color,
+                    alpha=0.25,
+                    edgecolor=_color,
+                    linewidth=0.8,
+                    label=ax_label,
+                    zorder=1,
                 )
                 # Anchor the point label and the marker on the configuration's
                 # middle: the seeds themselves hold no extra information here.
@@ -1122,10 +1164,10 @@ def render_pairs(
             results.texts,
             x_scatter=results.x_points,
             y_scatter=results.y_points,
-            textsize=8,
+            textsize=6,
             avoid_crossing_label_lines=op_avoid_crossing,
             avoid_label_lines_overlap=op_avoid_overlap,
-            min_distance=0.008,
+            min_distance=0.010,
             max_distance=0.1,
             # direction="southeast"
             linecolor=results.colors or "r",
