@@ -840,7 +840,8 @@ def render_pairs(
     *,
     key: str | None = None,
     dpi: int | None = DEFAULT_DPI,
-    fig_size: tuple[int] | None = None,
+    fig_size: tuple[float] | None = None,
+    text_size: float = 8.0,
     filters: FilterHook | None = None,
     baseline_selector: str | None = None,
     text_keys: list[str] | None = None,
@@ -868,6 +869,10 @@ def render_pairs(
     alternative point labels (a column each, e.g. a derived fan-out) and adds
     the "Point text" selectbox, defaulting to *spec.text_key*; the chosen
     column is carried by :func:`~.pairs.pair_frame`.
+
+    The plot's own controls (size, point text size, scales, label layout,
+    baseline) render *below* the chart, so the plot leads the tab; *fig_size*
+    and *text_size* are the tab's defaults for size and label text size.
     """
     import textalloc
 
@@ -918,83 +923,35 @@ def render_pairs(
                 if text != spec.text_key:
                     spec = replace(spec, text_key=text)
 
-    with st.container(horizontal=True):
-        x_label = st.text_input(
-            "x-axis metric label", value="", key=f"{stem}_xlabel"
-        )
-        y_label = st.text_input(
-            "y-axis metric label", value="", key=f"{stem}_ylabel"
-        )
+    # == Plot controls (values) ==
+    # The controls render below the chart (see "Plot controls" after it), so a
+    # rerun's widget value is read here, before drawing.
+    def _stored(name: str, default: Any) -> Any:
+        value = st.session_state.get(f"{stem}_{name}")
+        return default if value is None else value
 
-    _default_width, _default_height = fig_size if fig_size else (5, 5)
-    cont = st.container(horizontal=True)
-    with cont:
-        op_width = st.number_input(
-            "Plot width:",
-            min_value=0,
-            max_value=20,
-            value=_default_width,
-            width=80,
-            key=f"{stem}_width",
-        )
-        op_height = st.number_input(
-            "Plot height:",
-            min_value=0,
-            max_value=20,
-            value=_default_height,
-            width=80,
-            key=f"{stem}_height",
-        )
-
-        use_logx = st.checkbox(
-            "Use log-scale on X-axis", value=spec.log_x, key=f"{stem}_logx"
-        )
-        use_logy = st.checkbox(
-            "Use log-scale on Y-axis", value=spec.log_y, key=f"{stem}_logy"
-        )
-
-        # avoid_crossing_label_lines=True,
-        # avoid_label_lines_overlap=True,
-        op_avoid_crossing = st.checkbox(
-            "Avoid crossing label lines",
-            value=True,
-            key=f"{stem}_avoid_crossing",
-        )
-        op_avoid_overlap = st.checkbox(
-            "Avoid label lines overlap", value=True, key=f"{stem}_avoid_overlap"
-        )
-
-        # A declared repeat key turns each configuration's seeds into one filled
-        # percentile area instead of one point per seed (off = the flat view).
-        regions = spec.keep_key is not None and st.checkbox(
-            "Percentile areas (seed spread)",
-            value=True,
-            key=f"{stem}_regions",
-        )
-        # Trim per axis: q = the tail dropped on each side, so p q..p 1-q.
-        quantile = (
-            st.slider(
-                "Percentile trim q (per axis)",
-                min_value=0.0,
-                max_value=0.25,
-                value=0.1,
-                step=0.01,
-                format="%.2f",
-                key=f"{stem}_q",
-            )
-            if regions
-            else 0.0
-        )
+    _default_width, _default_height = (
+        (float(fig_size[0]), float(fig_size[1])) if fig_size else (5.0, 5.0)
+    )
+    op_width = _stored("width", _default_width)
+    op_height = _stored("height", _default_height)
+    op_text_size = _stored("textsize", text_size)
+    x_label = _stored("xlabel", "")
+    y_label = _stored("ylabel", "")
+    use_logx = _stored("logx", spec.log_x)
+    use_logy = _stored("logy", spec.log_y)
+    op_avoid_crossing = _stored("avoid_crossing", True)
+    op_avoid_overlap = _stored("avoid_overlap", True)
+    # A declared repeat key turns each configuration's seeds into one filled
+    # percentile area instead of one point per seed (off = the flat view).
+    has_repeats = spec.keep_key is not None
+    regions = has_repeats and _stored("regions", True)
+    # Trim per axis: q = the tail dropped on each side, so p q..p 1-q.
+    quantile = _stored("q", 0.1) if regions else 0.0
     if spec.keep_key and not regions:
         spec = replace(spec, keep_key=None)
 
-    append_legend = False
-    if spec.legend_keys:
-        append_legend = st.checkbox(
-            "Append " + " + ".join(spec.legend_keys) + " to legend names",
-            value=False,
-            key=f"{stem}_legend_keys",
-        )
+    append_legend = bool(spec.legend_keys) and _stored("legend_keys", False)
 
     # == Render ==
     frame = pair_frame(ctx, spec, agg=ctx.agg, filters=extra)
@@ -1010,26 +967,29 @@ def render_pairs(
     # == Baseline selector (mechanics, when the caller opts in) ==
     # The series multiselects already narrowed this tab through ctx.filters
     # (select_series at body top), so the baseline offers what is plottable.
+    baseline_options: list[str] | None = None
+    baseline_choice = "(none)"
     if baseline_selector and baseline_selector in frame.columns:
         baseline_options = ["(none)"] + (
             frame[baseline_selector].unique().drop_nulls().sort().to_list()
         )
-        index = (
-            baseline_options.index(spec.baseline_value)
-            if spec.baseline_value in baseline_options
-            else 0
+        baseline_choice = _stored(
+            "baseline",
+            (
+                spec.baseline_value
+                if spec.baseline_value in baseline_options
+                else "(none)"
+            ),
         )
-        choice = st.selectbox(
-            "Baseline struct (vertical lines)",
-            baseline_options,
-            index=index,
-            key=f"{stem}_baseline",
-        )
-        if choice == "(none)":
+        if baseline_choice not in baseline_options:
+            baseline_choice = "(none)"
+        if baseline_choice == "(none)":
             spec = replace(spec, baseline_value=None)
         else:
             spec = replace(
-                spec, baseline_key=baseline_selector, baseline_value=choice
+                spec,
+                baseline_key=baseline_selector,
+                baseline_value=baseline_choice,
             )
 
     fig, ax = plt.subplots(figsize=(op_width, op_height))
@@ -1164,7 +1124,7 @@ def render_pairs(
             results.texts,
             x_scatter=results.x_points,
             y_scatter=results.y_points,
-            textsize=6,
+            textsize=op_text_size,
             avoid_crossing_label_lines=op_avoid_crossing,
             avoid_label_lines_overlap=op_avoid_overlap,
             min_distance=0.010,
@@ -1199,6 +1159,87 @@ def render_pairs(
             f"configuration's seeds when the metrics are unrelated, up to "
             f"{axis_cover:.0%} when they rise and fall together, down to "
             f"{max(0.0, 2 * axis_cover - 1):.0%} when they trade off."
+        )
+
+    # == Plot controls (below the chart) ==
+    with st.container(horizontal=True):
+        st.number_input(
+            "Plot width:",
+            min_value=0.0,
+            max_value=20.0,
+            step=0.1,
+            value=float(_default_width),
+            width=80,
+            key=f"{stem}_width",
+        )
+        st.number_input(
+            "Plot height:",
+            min_value=0.0,
+            max_value=20.0,
+            step=0.1,
+            value=float(_default_height),
+            width=80,
+            key=f"{stem}_height",
+        )
+        st.number_input(
+            "Point text size:",
+            min_value=1.0,
+            max_value=40.0,
+            step=0.1,
+            value=float(text_size),
+            width=80,
+            key=f"{stem}_textsize",
+        )
+        st.checkbox(
+            "Use log-scale on X-axis", value=spec.log_x, key=f"{stem}_logx"
+        )
+        st.checkbox(
+            "Use log-scale on Y-axis", value=spec.log_y, key=f"{stem}_logy"
+        )
+        # avoid_crossing_label_lines=True,
+        # avoid_label_lines_overlap=True,
+        st.checkbox(
+            "Avoid crossing label lines",
+            value=True,
+            key=f"{stem}_avoid_crossing",
+        )
+        st.checkbox(
+            "Avoid label lines overlap", value=True, key=f"{stem}_avoid_overlap"
+        )
+        if has_repeats:
+            st.checkbox(
+                "Percentile areas (seed spread)",
+                value=True,
+                key=f"{stem}_regions",
+            )
+        if regions:
+            st.slider(
+                "Percentile trim q (per axis)",
+                min_value=0.0,
+                max_value=0.25,
+                value=0.1,
+                step=0.01,
+                format="%.2f",
+                key=f"{stem}_q",
+            )
+
+    with st.container(horizontal=True):
+        st.text_input("x-axis metric label", value="", key=f"{stem}_xlabel")
+        st.text_input("y-axis metric label", value="", key=f"{stem}_ylabel")
+
+    if spec.legend_keys:
+        st.checkbox(
+            "Append " + " + ".join(spec.legend_keys) + " to legend names",
+            value=False,
+            key=f"{stem}_legend_keys",
+        )
+
+    if baseline_options:
+        st.selectbox(
+            "Baseline struct (vertical lines)",
+            baseline_options,
+            index=baseline_options.index(baseline_choice),
+            key=f"{stem}_baseline",
         )
 
     _step_name = ctx.step
