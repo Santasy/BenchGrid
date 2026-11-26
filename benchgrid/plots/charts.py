@@ -480,6 +480,7 @@ def lines_chart(
     *,
     title: str = "",
     text_key: str | None = None,
+    color_sort: list | None = None,
     log_x: bool = False,
     log_y: bool = False,
     height: int = 350,
@@ -489,9 +490,11 @@ def lines_chart(
     Generic line chart: x_key × y_key, one line per *color_key*.
 
     With *text_key* each point is labeled with its value (e.g. the target size
-    achieving a growth-curve envelope).  *log_x*/*log_y* log the axes;
-    *height*/*width* are the figure size in pixels (*width* ``None`` = the
-    chart's default; curves want more height than a heatmap).
+    achieving a growth-curve envelope).  *color_sort* is the series order (the
+    explicit color domain: values absent from it get no legend entry);
+    *log_x*/*log_y* log the axes; *height*/*width* are the figure size in pixels
+    (*width* ``None`` = the chart's default; curves want more height than a
+    heatmap).
     """
     import altair as alt
 
@@ -525,14 +528,14 @@ def lines_chart(
     ).encode(
         x=x,
         y=y,
-        color=alt.Color(f"{color_key}:N", title=color_key),
+        color=alt.Color(f"{color_key}:N", title=color_key, sort=color_sort),
     )
     if text_key and text_key in df.columns:
         labels = base.mark_text(dy=-10, fontSize=10).encode(
             x=x,
             y=y,
             text=_text_alt(df, text_key),
-            color=alt.Color(f"{color_key}:N"),
+            color=alt.Color(f"{color_key}:N", sort=color_sort),
         )
         return (line + labels).properties(
             height=height, **({"width": width} if width else {})

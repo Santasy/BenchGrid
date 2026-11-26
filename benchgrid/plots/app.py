@@ -1127,7 +1127,7 @@ def render_pairs(
             textsize=op_text_size,
             avoid_crossing_label_lines=op_avoid_crossing,
             avoid_label_lines_overlap=op_avoid_overlap,
-            min_distance=0.010,
+            min_distance=0.012,
             max_distance=0.1,
             # direction="southeast"
             linecolor=results.colors or "r",
